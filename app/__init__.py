@@ -1,0 +1,1 @@
+"""Static-context estimation application."""

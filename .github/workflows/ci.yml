@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.4'
+      - name: Install Python
+        run: uv python install "${{ matrix.python-version }}"
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Run offline tests
+        run: uv run pytest -q
+      - name: Build package
+        run: uv build

@@ -1,0 +1,11 @@
+Reunión ficticia — campaña de lanzamiento de Brisa Verde
+
+Lucía (marketing): Necesitamos una landing page en español para captar solicitudes de demostración. Queremos lanzarla dentro de cuatro semanas. Tendrá una cabecera, beneficios, testimonios, preguntas frecuentes y un formulario.
+Diego (desarrollo): ¿Hay diseño y contenidos disponibles? ¿Qué debe ocurrir cuando alguien envíe el formulario?
+Lucía: Tenemos el diseño en Figma para móvil y escritorio. Entregaremos los textos y las imágenes al inicio. El formulario debe crear un contacto en HubSpot con nombre, correo, empresa y consentimiento. No necesitamos pagos ni cuentas de usuario.
+Diego: Debemos validar campos, mostrar confirmación y gestionar errores sin duplicar contactos. Necesitaremos acceso a una cuenta de pruebas de HubSpot y confirmar las propiedades y las reglas de consentimiento con vuestro equipo.
+Lucía: También queremos un blog sencillo con listado y página de artículo. Marketing debe poder publicar sin ayuda técnica. Para el lanzamiento habrá tres artículos, pero todavía no hemos elegido el CMS.
+Diego: Incluiremos una propuesta de CMS y su configuración como supuesto pendiente de aprobación. El alcance contempla diseño responsive, SEO básico, accesibilidad del formulario, pruebas de integración y despliegue. La identidad visual ya está definida en Figma.
+Lucía: La fecha de campaña es fija: cuatro semanas. Preferimos reducir funcionalidades antes que retrasarla. Tendremos una persona disponible para revisar avances dos veces por semana.
+Diego: Estimaremos horas y costes por tarea, indicaremos tarifa y moneda como supuestos y separaremos dependencias y riesgos. Licencias de CMS, alojamiento y servicios externos no están presupuestados todavía. La disponibilidad de contenidos, accesos y aprobación del diseño condiciona el plazo.
+Lucía: De acuerdo. Fuera de alcance quedan traducciones, tienda online, migración de artículos antiguos y automatizaciones avanzadas de HubSpot. Queremos una estimación orientativa, no un compromiso contractual.

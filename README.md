@@ -1,0 +1,153 @@
+# CAG Estimator
+
+FastAPI API that combines a meeting transcription with two fictional historical
+estimates and asks OpenAI `gpt-4o-mini` for a Spanish estimate. No database,
+retrieval or application persistence is used.
+
+## Quickstart
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+```sh
+uv sync --frozen --extra dev
+```
+
+Manually create `.env.example` with this blank template (no credentials):
+
+```dotenv
+LLM_PROVIDER=
+OPENAI_API_KEY=
+OPENAI_MODEL=
+```
+
+Dotenv files are intentionally human-managed: neither is required by tests or
+CI. Manually create the ignored `.env` file using the same blank template.
+Blank settings are ignored. When neither environment nor `.env` provides a
+nonblank value, defaults are provider `openai`, model `gpt-4o-mini`, and no key.
+Only that provider/model combination is supported. Nonempty environment values
+override `.env`; an empty environment value does **not** disable a key already
+configured in `.env`. To enable real estimates, supply your own key locally or
+through the environment; never commit it. Remove the key from both sources to
+disable real requests. Restart after configuration changes.
+
+```sh
+uv run uvicorn app.main:app --reload
+```
+
+Open [interactive docs](http://127.0.0.1:8000/docs) or check health:
+
+```sh
+curl http://127.0.0.1:8000/health
+```
+
+Health and docs work without an API key. Estimation returns an actionable 503
+until a key is configured.
+
+## Estimate
+
+This request sends the transcription to OpenAI and may incur charges:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/estimate \
+  -H 'Content-Type: application/json' \
+  --data-binary @examples/estimate-request.json
+```
+
+The fictional Spanish meeting in `examples/meeting-transcript.txt` describes a
+marketing landing page, HubSpot integration, a blog, existing Figma designs and
+a four-week deadline. `examples/estimate-request.json` wraps the same transcript
+as JSON; the endpoint accepts JSON, not a raw text file.
+
+### Endpoint contract
+
+| Method and path | Request | Successful response |
+| --- | --- | --- |
+| `GET /health` | None | `200` with `{"status":"ok"}` |
+| `GET /docs` | None | Interactive OpenAPI documentation |
+| `POST /api/v1/estimate` | `application/json`, `{"transcription":"Meeting text"}` | `200` with the JSON object below |
+
+Illustrative response shape, not a verified model output:
+
+```json
+{
+  "estimation": "Estimación orientativa: tareas, horas, costes, supuestos y riesgos...",
+  "model": "gpt-4o-mini",
+  "provider": "openai"
+}
+```
+
+The response contains `estimation` (Spanish text), `model` (`gpt-4o-mini`) and
+`provider` (`openai`). Estimates include task hours/costs, assumptions, risks and
+uncertainty; they are guidance, not commitments.
+
+The transcription must be a nonblank string of at most 20,000 characters after
+trimming whitespace. Invalid requests return 422. Provider timeout returns 504,
+rate limiting returns 503, and other SDK failures or empty results return 502,
+without exposing upstream error details. Error responses use FastAPI's `detail`
+field (a validation error list for 422; a safe message for service failures).
+The estimate is free-form text inside JSON, not a structured task/cost schema.
+
+## How static-context CAG works
+
+Each request includes two fictional, structured historical estimates with task
+hours and costs in the system message, alongside Spanish estimation instructions.
+The transcription is sent separately as untrusted user content. Context lives in
+`app/context/examples.py` and is rendered by `app/prompts.py`.
+
+Here CAG means supplying a fixed few-shot context on every request. There is no
+retrieval, vector store, database, conversation memory, application response
+cache or persistence. Provider-side prompt caching is not configured or
+guaranteed. Historical examples guide style and reasoning; they do not establish
+real project prices or guarantee accurate estimates.
+
+## Structure and checks
+
+- `app/main.py`: application, health and `/api/v1` router registration.
+- `app/routers/estimations.py`: request/response schemas and estimation endpoint.
+- `app/services/llm_service.py`: async SDK request and safe failures.
+- `app/context/examples.py`: structured historical task/hour/cost examples.
+- `app/prompts.py`: Spanish instructions and rendered static context.
+- `app/config.py`: typed dotenv/environment settings.
+
+```sh
+uv run pytest -q
+uv build
+```
+
+Tests mock the async SDK and require no paid model calls or real credentials.
+They cover configuration, validation, prompt context, SDK failures and response
+shape. Structural checks enforce the package layout, delivery artifacts, matching
+fixtures, a local dotenv ignore rule and (when Git is available) absence of
+tracked secret dotenv filenames. They do not scan credential contents or require
+`.env` or `.env.example` to exist.
+
+`.github/workflows/ci.yml` checks Python 3.11 (minimum) and 3.14 (original
+scaffold version). Each job checks out the repository, installs uv and Python,
+runs `uv sync --frozen --extra dev`, `uv run pytest -q`, and `uv build`.
+`UV_PYTHON` selects each matrix version rather than the local `.python-version`.
+Local passing checks do not establish that the hosted workflow has run.
+
+## Live-provider checklist (manual, potentially billable)
+
+Mocks establish API behavior, not real model quality. Before claiming live
+validation:
+
+- [ ] Configure your own key locally without committing it; restart the server.
+- [ ] Start uvicorn and check `/health` and `/docs` without sending a transcript.
+- [ ] Run the fixture curl request above and confirm the response contract.
+- [ ] Review Spanish output for landing page, HubSpot, blog and Figma scope;
+      distinguish the requested four-week deadline from a feasibility promise.
+- [ ] Check task hours, arithmetic, rate/currency assumptions, dependencies,
+      exclusions and uncertainty against the meeting and historical examples.
+- [ ] Record model, date and review findings without publishing credentials or
+      sensitive transcripts. Do not infer quality from a single successful call.
+
+## Limitations
+
+This exercise has no authentication or application rate limiting; do not expose
+it publicly without those controls. Transcriptions leave the application for
+OpenAI processing, so avoid sensitive content. Prompt instructions separate
+untrusted transcription from system context but cannot guarantee resistance to
+prompt injection. Generated arithmetic and estimates need human review. Live-provider quality
+and real server startup are separate manual checks, not guarantees of mocked
+tests or package builds.
