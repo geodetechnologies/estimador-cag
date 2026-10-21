@@ -1,4 +1,6 @@
 from copy import deepcopy
+import os
+from pathlib import Path
 import json
 import subprocess
 import sys
@@ -49,7 +51,7 @@ def test_startup_applies_level_to_application_and_server(monkeypatch, argv, relo
 
     monkeypatch.setenv('LOG_LEVEL', 'warning')
     original = deepcopy(LOGGING_CONFIG)
-    with patch('app.__main__.uvicorn.run') as run:
+    with patch('app.__main__.dictConfig'), patch('app.__main__.uvicorn.run') as run:
         main(argv)
     run.assert_called_once()
     args, kwargs = run.call_args
@@ -87,6 +89,29 @@ for name in ('app', 'uvicorn', 'uvicorn.error', 'uvicorn.access'):
         'WARNING:  uvicorn warning\n'
         'WARNING:  uvicorn.error warning\n'
     )
+
+
+@pytest.mark.parametrize('level, expected', [
+    ('INFO', 'INFO:     Application environment: staging\n'),
+    ('WARNING', ''),
+])
+def test_startup_logs_environment_at_info(level, expected):
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
+    env['APP_ENV'] = 'staging'
+    env['LOG_LEVEL'] = level
+    result = subprocess.run(
+        [sys.executable, '-c', '''
+import runpy
+from unittest.mock import patch
+with patch('uvicorn.run') as run:
+    runpy.run_module('app', run_name='__main__')
+run.assert_called_once()
+'''], env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0
+    assert result.stdout == ''
+    assert result.stderr == expected
 
 
 def test_help_describes_reload(capsys):

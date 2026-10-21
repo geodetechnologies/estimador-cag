@@ -4,6 +4,26 @@ from pydantic import ValidationError
 from app.config import Settings
 
 
+def test_app_env_defaults_and_blank_values(tmp_path, monkeypatch):
+    monkeypatch.delenv('APP_ENV', raising=False)
+    assert Settings(_env_file=None).app_env == 'development'
+    dotenv = tmp_path / 'settings.txt'
+    dotenv.write_text('APP_ENV=\n')
+    monkeypatch.setenv('APP_ENV', '')
+    assert Settings(_env_file=dotenv).app_env == 'development'
+
+
+def test_app_env_dotenv_and_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv('APP_ENV', raising=False)
+    dotenv = tmp_path / 'settings.txt'
+    dotenv.write_text('APP_ENV=staging\n')
+    assert Settings(_env_file=dotenv).app_env == 'staging'
+    monkeypatch.setenv('APP_ENV', 'production')
+    assert Settings(_env_file=dotenv).app_env == 'production'
+    monkeypatch.setenv('APP_ENV', '')
+    assert Settings(_env_file=dotenv).app_env == 'staging'
+
+
 def test_defaults(monkeypatch):
     for name in ('OPENAI_API_KEY', 'OPENAI_MODEL', 'LLM_PROVIDER'):
         monkeypatch.delenv(name, raising=False)

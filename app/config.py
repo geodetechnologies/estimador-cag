@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         extra='ignore',
     )
 
+    app_env: str = 'development'
     log_level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
 
     @field_validator('log_level', mode='before')

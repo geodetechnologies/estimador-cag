@@ -19,6 +19,7 @@ LLM_PROVIDER=
 OPENAI_API_KEY=
 OPENAI_MODEL=
 LOG_LEVEL=INFO
+APP_ENV=development
 ```
 
 Dotenv files are intentionally human-managed: neither is required by tests or
@@ -30,6 +31,13 @@ override `.env`; an empty environment value does **not** disable a key already
 configured in `.env`. To enable real estimates, supply your own key locally or
 through the environment; never commit it. Remove the key from both sources to
 disable real requests. Restart after configuration changes.
+
+`APP_ENV` is a text setting with default `development`. It follows the same
+nonempty environment-over-`.env` priority. Other labels, such as `staging` or
+`production`, are accepted. It is informational only: it does not change logging,
+disable `/docs`, enable auto-reload, or apply production security controls.
+The `python -m app` entry point logs `Application environment: <APP_ENV>` once
+at startup at `INFO` level; `LOG_LEVEL=WARNING` or higher suppresses it.
 
 ```sh
 uv run python -m app
