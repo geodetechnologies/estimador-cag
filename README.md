@@ -18,6 +18,7 @@ Manually create `.env.example` with this blank template (no credentials):
 LLM_PROVIDER=
 OPENAI_API_KEY=
 OPENAI_MODEL=
+LOG_LEVEL=INFO
 ```
 
 Dotenv files are intentionally human-managed: neither is required by tests or
@@ -31,7 +32,39 @@ through the environment; never commit it. Remove the key from both sources to
 disable real requests. Restart after configuration changes.
 
 ```sh
-uv run uvicorn app.main:app --reload
+uv run python -m app
+```
+
+This starts the server on `127.0.0.1:8000`. `LOG_LEVEL` controls Python
+application logs and Uvicorn's server and access logs. Supported levels are
+`DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL` (case-insensitive).
+The default is `INFO`; blank values are ignored, environment overrides `.env`,
+and invalid levels prevent startup. Restart to apply changes. This setting
+controls logging verbosity only; it does not add request-body or credential
+logging. Third-party libraries may emit more details at `DEBUG`; avoid that
+level with sensitive production traffic.
+
+```sh
+LOG_LEVEL=warning uv run python -m app
+uv run python -m app --help
+```
+
+For development with auto-reload, use the same entry point to keep `LOG_LEVEL`
+from the environment or `.env`:
+
+```sh
+uv run python -m app --reload
+```
+
+Auto-reload watches Python code changes. After changing `.env` or `LOG_LEVEL`,
+stop and restart the entire command; the reloader reuses its logging configuration.
+Do not use `--reload` in production.
+
+The direct Uvicorn command still works, but bypasses the logging setup above.
+Set its logging level explicitly:
+
+```sh
+uv run uvicorn app.main:app --reload --log-level debug
 ```
 
 Open [interactive docs](http://127.0.0.1:8000/docs) or check health:
@@ -108,6 +141,7 @@ real project prices or guarantee accurate estimates.
 - `app/context/examples.py`: structured historical task/hour/cost examples.
 - `app/prompts.py`: Spanish instructions and rendered static context.
 - `app/config.py`: typed dotenv/environment settings.
+- `app/__main__.py`: server entry point with shared application/Uvicorn log level.
 
 ```sh
 uv run pytest -q

@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,14 @@ class Settings(BaseSettings):
         env_file='.env', env_file_encoding='utf-8', env_ignore_empty=True,
         extra='ignore',
     )
+
+    log_level: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
+
+    @field_validator('log_level', mode='before')
+    @classmethod
+    def normalize_log_level(cls, value: object) -> object:
+        """Accept case-insensitive standard logging level names."""
+        return value.upper() if isinstance(value, str) else value
 
     llm_provider: Literal['openai'] = 'openai'
     openai_model: Literal['gpt-4o-mini'] = 'gpt-4o-mini'
