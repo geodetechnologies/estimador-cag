@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings",
     "openai",
     "python-dotenv",
+    "streamlit>=1.41,<2",
 ]
 
 [project.optional-dependencies]
