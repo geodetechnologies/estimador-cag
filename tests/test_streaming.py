@@ -15,13 +15,15 @@ def settings(key='test-key'):
     return Settings(_env_file=None, openai_api_key=key)
 
 
-def fake_stream(monkeypatch, parts, error=None):
+def fake_stream(monkeypatch, parts, error=None, usage=None):
     async def chunks():
         for part in parts:
             yield SimpleNamespace(choices=[SimpleNamespace(
                 delta=SimpleNamespace(content=part))])
         if error:
             raise error
+        if usage is not None:
+            yield SimpleNamespace(choices=[], usage=usage, model='gpt-4o-mini-provider')
 
     stream = AsyncMock()
     stream.__aiter__.side_effect = chunks
@@ -97,3 +99,54 @@ def test_stream_missing_key_never_calls_provider(monkeypatch, key):
     with pytest.raises(llm_service.EstimationError, match='OPENAI_API_KEY'):
         asyncio.run(consume())
     factory.assert_not_called()
+
+
+def test_stream_collects_provider_usage_without_yielding_metadata(monkeypatch):
+    _, create, _, _ = fake_stream(monkeypatch, ['Estimate ', '42 hours'],
+        usage=SimpleNamespace(prompt_tokens=123, completion_tokens=17))
+    clock = iter([10.0, 12.5])
+    monkeypatch.setattr(llm_service, 'perf_counter', lambda: next(clock), raising=False)
+    metrics = llm_service.CallMetrics()
+
+    async def consume():
+        return [part async for part in llm_service.stream_estimate(
+            [], settings(), metrics=metrics)]
+
+    assert asyncio.run(consume()) == ['Estimate ', '42 hours']
+    assert create.call_args.kwargs['stream_options'] == {'include_usage': True}
+    assert metrics.model == 'gpt-4o-mini-provider'
+    assert metrics.input_tokens == 123
+    assert metrics.output_tokens == 17
+    assert metrics.elapsed_seconds == 2.5
+
+
+def test_stream_missing_usage_is_not_reported_as_zero(monkeypatch):
+    fake_stream(monkeypatch, ['Estimate'])
+    metrics = llm_service.CallMetrics()
+
+    async def consume():
+        return [part async for part in llm_service.stream_estimate(
+            [], settings(), metrics=metrics)]
+
+    assert asyncio.run(consume()) == ['Estimate']
+    assert metrics.model == 'gpt-4o-mini'
+    assert metrics.input_tokens is None
+    assert metrics.output_tokens is None
+    assert metrics.elapsed_seconds >= 0
+
+
+def test_failed_stream_does_not_publish_success_metrics(monkeypatch):
+    fake_stream(monkeypatch, ['Partial'], APIConnectionError(
+        message='secret diagnostics', request=httpx.Request('POST', 'https://example.invalid')))
+    metrics = llm_service.CallMetrics()
+
+    async def consume():
+        return [part async for part in llm_service.stream_estimate(
+            [], settings(), metrics=metrics)]
+
+    with pytest.raises(llm_service.EstimationError):
+        asyncio.run(consume())
+    assert metrics.model is None
+    assert metrics.input_tokens is None
+    assert metrics.output_tokens is None
+    assert metrics.elapsed_seconds is None
