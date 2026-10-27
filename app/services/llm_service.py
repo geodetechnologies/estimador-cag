@@ -1,6 +1,8 @@
 """Combine static context with user text and translate provider failures safely."""
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from time import perf_counter
 
 from openai import AsyncOpenAI, OpenAIError, APITimeoutError, RateLimitError
 
@@ -56,20 +58,36 @@ async def estimate(transcription: str, settings: Settings) -> str:
     return content.strip()
 
 
+@dataclass
+class CallMetrics:
+    """Provider usage and full elapsed time, published only after success."""
+
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    elapsed_seconds: float | None = None
+
+
 async def stream_estimate(
     messages: list[dict[str, str]], settings: Settings,
+    *, metrics: CallMetrics | None = None,
 ) -> AsyncIterator[str]:
     """Yield provider text deltas using the API's CAG prompt and configuration.
 
     The chat supplies completed user/assistant turns and the new transcript.
     Client and stream close even on provider failure. Partial output must not
-    be saved as a completed answer by the caller.
+    be saved as a completed answer by the caller. Optional metrics request
+    provider usage and measure the entire stream, not time to first token.
     """
     key = settings.openai_api_key
     if key is None or not key.get_secret_value().strip():
         raise EstimationError(503, 'Set OPENAI_API_KEY on the server to enable estimation.')
 
     has_text = False
+    started = perf_counter() if metrics is not None else None
+    model = settings.openai_model
+    input_tokens = output_tokens = None
+    options = {'stream_options': {'include_usage': True}} if metrics is not None else {}
     try:
         async with AsyncOpenAI(
             api_key=key.get_secret_value(), timeout=30.0, max_retries=0,
@@ -78,9 +96,16 @@ async def stream_estimate(
                 model=settings.openai_model,
                 messages=[{'role': 'system', 'content': SYSTEM_PROMPT}, *messages],
                 stream=True,
+                **options,
             )
             async with stream:
                 async for chunk in stream:
+                    if metrics is not None:
+                        model = getattr(chunk, 'model', None) or model
+                        usage = getattr(chunk, 'usage', None)
+                        if usage is not None:
+                            input_tokens = usage.prompt_tokens
+                            output_tokens = usage.completion_tokens
                     content = chunk.choices[0].delta.content if chunk.choices else None
                     if content:
                         has_text = has_text or bool(content.strip())
@@ -94,3 +119,8 @@ async def stream_estimate(
 
     if not has_text:
         raise EstimationError(502, 'Estimation provider returned an empty result.')
+    if metrics is not None:
+        metrics.model = model
+        metrics.input_tokens = input_tokens
+        metrics.output_tokens = output_tokens
+        metrics.elapsed_seconds = perf_counter() - started

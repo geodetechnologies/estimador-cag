@@ -112,7 +112,15 @@ session or reload can reset them. Provider failures show a safe error; failed
 turns and partial answers are not added to history. Resubmit to retry. Long
 conversations can exceed the provider context limit: start a new session if
 needed. Avoid sensitive data: the transcript and history leave the app for OpenAI.
-The optional context/metrics sidebar is not implemented.
+The sidebar shows the exact active system prompt and injected historical examples
+in read-only expanders. After a successful response it displays the provider's
+reported model (or the configured model if absent), input and output tokens,
+and response time in seconds. Tokens are the provider's `prompt_tokens` and
+`completion_tokens` for the whole call, including context and conversation history;
+missing usage displays `Not available`, never an estimated count. Response time
+measures the full stream through completion and cleanup, not time to first token.
+Metrics persist across reruns, update without an extra request, and clear when a
+new call fails. No credentials are displayed.
 
 ### Chat verification
 
@@ -121,7 +129,8 @@ uv run pytest -q tests/test_streaming.py tests/test_streamlit_app.py
 ```
 
 These tests use a fake stream and Streamlit's `AppTest` to check incremental
-text, shared CAG prompt, multi-turn history and safe failures without paid calls.
+text, shared CAG prompt, multi-turn history, read-only sidebar context, provider
+usage, elapsed time and safe failures without paid calls.
 For a manual live check, start the app, submit the example transcript, confirm
 text appears progressively, then ask a follow-up and confirm both turns remain
 visible. This last check uses your configured key and is potentially billable.
