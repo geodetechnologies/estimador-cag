@@ -84,6 +84,48 @@ curl http://127.0.0.1:8000/health
 Health and docs work without an API key. Estimation returns an actionable 503
 until a key is configured.
 
+## Conversational web interface
+
+From the project root, after `uv sync --frozen --extra dev`, configure
+`OPENAI_API_KEY` in your local `.env` or environment as described above, then run:
+
+```sh
+uv run streamlit run streamlit_app.py
+```
+
+With the virtual environment activated, `streamlit run streamlit_app.py` also
+works. Open the local URL printed by Streamlit (normally
+<http://localhost:8501>). Paste a meeting transcript in the chat and submit it;
+the assistant displays the estimate incrementally as OpenAI sends text deltas.
+You can paste `examples/meeting-transcript.txt` for a first estimate, then ask
+follow-up questions. Each submission calls OpenAI and may incur charges.
+
+No FastAPI server is needed: the UI calls the shared Python estimation service
+directly, using the exact same system prompt, historical examples, model,
+credentials, timeout and no-retry policy as the endpoint. Credentials are read
+by the existing settings loader, never embedded in the UI. Restart Streamlit
+after changing configuration. This app uses `.env`/environment, not `st.secrets`.
+
+Completed turns stay visible in `st.session_state` across Streamlit reruns and
+are sent with subsequent questions. They are not saved to disk; a new browser
+session or reload can reset them. Provider failures show a safe error; failed
+turns and partial answers are not added to history. Resubmit to retry. Long
+conversations can exceed the provider context limit: start a new session if
+needed. Avoid sensitive data: the transcript and history leave the app for OpenAI.
+The optional context/metrics sidebar is not implemented.
+
+### Chat verification
+
+```sh
+uv run pytest -q tests/test_streaming.py tests/test_streamlit_app.py
+```
+
+These tests use a fake stream and Streamlit's `AppTest` to check incremental
+text, shared CAG prompt, multi-turn history and safe failures without paid calls.
+For a manual live check, start the app, submit the example transcript, confirm
+text appears progressively, then ask a follow-up and confirm both turns remain
+visible. This last check uses your configured key and is potentially billable.
+
 ## Estimate
 
 This request sends the transcription to OpenAI and may incur charges:
@@ -136,8 +178,8 @@ The transcription is sent separately as untrusted user content. Context lives in
 `app/context/examples.py` and is rendered by `app/prompts.py`.
 
 Here CAG means supplying a fixed few-shot context on every request. There is no
-retrieval, vector store, database, conversation memory, application response
-cache or persistence. Provider-side prompt caching is not configured or
+retrieval, vector store, database, application response cache or durable
+persistence. The web chat keeps conversation history only in its Streamlit session. Provider-side prompt caching is not configured or
 guaranteed. Historical examples guide style and reasoning; they do not establish
 real project prices or guarantee accurate estimates.
 
@@ -145,7 +187,8 @@ real project prices or guarantee accurate estimates.
 
 - `app/main.py`: application, health and `/api/v1` router registration.
 - `app/routers/estimations.py`: request/response schemas and estimation endpoint.
-- `app/services/llm_service.py`: async SDK request and safe failures.
+- `streamlit_app.py`: conversational UI with session history and streaming.
+- `app/services/llm_service.py`: async SDK requests, streaming and safe failures.
 - `app/context/examples.py`: structured historical task/hour/cost examples.
 - `app/prompts.py`: Spanish instructions and rendered static context.
 - `app/config.py`: typed dotenv/environment settings.
