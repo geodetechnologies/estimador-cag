@@ -11,7 +11,11 @@ REQUIRED_FILES = (
     'app/__init__.py',
     'app/main.py',
     'app/config.py',
-    'app/prompts.py',
+    'app/prompts/__init__.py',
+    'app/prompts/loader.py',
+    'app/prompts/estimation/v1/system.j2',
+    'app/prompts/estimation/v1/user.j2',
+    'app/prompts/estimation/v1/examples.j2',
     'app/routers/__init__.py',
     'app/routers/estimations.py',
     'app/services/__init__.py',
@@ -33,8 +37,9 @@ def test_required_artifact_exists(relative_path):
 def test_request_fixture_matches_transcript():
     payload = json.loads((ROOT / 'examples/estimate-request.json').read_text())
     transcript = (ROOT / 'examples/meeting-transcript.txt').read_text().strip()
-    assert payload == {'transcription': transcript}
-    assert 0 < len(transcript) <= 20000
+    assert payload == {'description': transcript, 'project_type': 'web_saas',
+                       'detail_level': 'detailed', 'output_format': 'phases_table'}
+    assert 20 <= len(transcript) <= 2000
 
 
 def test_local_dotenv_has_ignore_rule():

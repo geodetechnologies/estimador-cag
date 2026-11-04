@@ -1,9 +1,12 @@
 """Combine static context with user text and translate provider failures safely."""
 
+import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from time import perf_counter
 
+import anyio
 from openai import AsyncOpenAI, OpenAIError, APITimeoutError, RateLimitError
 
 from app.config import Settings
@@ -19,7 +22,7 @@ class EstimationError(Exception):
         self.detail = detail
 
 
-async def estimate(transcription: str, settings: Settings) -> str:
+async def estimate(transcription: str, settings: Settings, *, system: str = SYSTEM_PROMPT) -> str:
     """Request an estimate with a per-call async client that closes on exit.
 
     Static system context and untrusted user text remain separate messages;
@@ -41,7 +44,7 @@ async def estimate(transcription: str, settings: Settings) -> str:
             response = await client.chat.completions.create(
                 model=settings.openai_model,
                 messages=[
-                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'system', 'content': system},
                     {'role': 'user', 'content': transcription},
                 ],
             )
@@ -58,6 +61,21 @@ async def estimate(transcription: str, settings: Settings) -> str:
     return content.strip()
 
 
+@asynccontextmanager
+async def _shielded_exit(manager):
+    """Allow async provider cleanup to finish under level cancellation."""
+    value = await manager.__aenter__()
+    try:
+        yield value
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            if not await manager.__aexit__(*sys.exc_info()):
+                raise
+    else:
+        with anyio.CancelScope(shield=True):
+            await manager.__aexit__(None, None, None)
+
+
 @dataclass
 class CallMetrics:
     """Provider usage and full elapsed time, published only after success."""
@@ -70,9 +88,9 @@ class CallMetrics:
 
 async def stream_estimate(
     messages: list[dict[str, str]], settings: Settings,
-    *, metrics: CallMetrics | None = None,
+    *, metrics: CallMetrics | None = None, system: str = SYSTEM_PROMPT,
 ) -> AsyncIterator[str]:
-    """Yield provider text deltas using the API's CAG prompt and configuration.
+    """Yield provider text deltas using the default or supplied system prompt.
 
     The chat supplies completed user/assistant turns and the new transcript.
     Client and stream close even on provider failure. Partial output must not
@@ -89,16 +107,16 @@ async def stream_estimate(
     input_tokens = output_tokens = None
     options = {'stream_options': {'include_usage': True}} if metrics is not None else {}
     try:
-        async with AsyncOpenAI(
+        async with _shielded_exit(AsyncOpenAI(
             api_key=key.get_secret_value(), timeout=30.0, max_retries=0,
-        ) as client:
+        )) as client:
             stream = await client.chat.completions.create(
                 model=settings.openai_model,
-                messages=[{'role': 'system', 'content': SYSTEM_PROMPT}, *messages],
+                messages=[{'role': 'system', 'content': system}, *messages],
                 stream=True,
                 **options,
             )
-            async with stream:
+            async with _shielded_exit(stream):
                 async for chunk in stream:
                     if metrics is not None:
                         model = getattr(chunk, 'model', None) or model

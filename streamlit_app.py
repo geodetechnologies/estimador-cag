@@ -1,70 +1,116 @@
-"""Run the CAG chat with: streamlit run streamlit_app.py."""
+"""Run the estimation form with: streamlit run streamlit_app.py."""
 
+import codecs
+import json
+import os
+
+import httpx
 import streamlit as st
+from pydantic import ValidationError
 
-from app.config import get_settings
-from app.context.examples import render_examples
-from app.prompts import SYSTEM_PROMPT
-from app.services.llm_service import CallMetrics, EstimationError, stream_estimate
+from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectType
 
 
-st.set_page_config(page_title='CAG Estimator', page_icon='💬')
-st.title('CAG Estimator')
-st.caption('Paste a meeting transcript to estimate software scope, hours and costs.')
-st.caption('Transcripts and conversation history are sent to OpenAI. Avoid sensitive data.')
+def stream_lines(response):
+    """Decode UTF-8 strictly and yield only terminated SSE lines."""
+    line = []
+    after_cr = False
+    for chunk in codecs.iterdecode(response.iter_bytes(), 'utf-8-sig'):
+        for char in chunk:
+            if after_cr and char == '\n':
+                after_cr = False
+                continue
+            after_cr = False
+            if char in '\r\n':
+                yield ''.join(line)
+                line = []
+                after_cr = char == '\r'
+            else:
+                line.append(char)
 
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'last_metrics' not in st.session_state:
-    st.session_state.last_metrics = None
-    st.session_state.last_call_failed = False
 
-with st.sidebar:
-    st.header('CAG context')
-    with st.expander('Active system prompt'):
-        st.code(SYSTEM_PROMPT, language=None)
-    with st.expander('Injected static context'):
-        st.code(render_examples(), language=None)
-    st.subheader('Last call')
-    metrics_placeholder = st.empty()
+def stream_events(response):
+    """Decode complete SSE frames, joining multi-line data before JSON parsing."""
+    event = None
+    data = []
+    for line in stream_lines(response):
+        if not line:
+            if event is not None or data:
+                if event is None or not data:
+                    raise ValueError('Incomplete event')
+                yield event, json.loads('\n'.join(data))
+            event, data = None, []
+        elif not line.startswith(':'):
+            field, _, value = line.partition(':')
+            value = value.removeprefix(' ')
+            if field == 'event':
+                event = value
+            elif field == 'data':
+                data.append(value)
 
-for message in st.session_state.messages:
-    with st.chat_message(message['role']):
-        st.markdown(message['content'])
 
-transcription = st.chat_input('Paste a meeting transcript or ask a follow-up question')
-if transcription and transcription.strip():
-    user_message = {'role': 'user', 'content': transcription.strip()}
-    with st.chat_message('user'):
-        st.markdown(user_message['content'])
-    with st.chat_message('assistant'):
-        metrics = CallMetrics()
-        try:
-            answer = st.write_stream(stream_estimate(
-                [*st.session_state.messages, user_message], get_settings(), metrics=metrics,
-            ))
-        except EstimationError as error:
-            st.session_state.last_metrics = None
-            st.session_state.last_call_failed = True
-            st.error(str(error))
-            st.caption('The incomplete turn was not saved. Please submit it again to retry.')
+def receive_estimate(response, display):
+    """Display deltas, returning a result only after a valid completion event."""
+    response.raise_for_status()
+    if response.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'text/event-stream':
+        raise ValueError('Unexpected content type')
+    version = None
+    fragments = []
+    for event, data in stream_events(response):
+        if not isinstance(data, dict):
+            raise ValueError('Invalid event data')
+        if event == 'metadata' and version is None and not fragments:
+            version = data.get('prompt_version')
+            if not isinstance(version, str) or not version:
+                raise ValueError('Invalid metadata')
+        elif event == 'delta' and version is not None:
+            text = data.get('text')
+            if not isinstance(text, str):
+                raise ValueError('Invalid delta')
+            fragments.append(text)
+            display.markdown(''.join(fragments))
+        elif event == 'done' and version is not None and fragments and data == {}:
+            return {'text': ''.join(fragments), 'prompt_version': version}
         else:
-            st.session_state.last_metrics = metrics
-            st.session_state.last_call_failed = False
-            st.session_state.messages.extend([
-                user_message, {'role': 'assistant', 'content': answer},
-            ])
+            raise ValueError('Unexpected stream event')
+    raise ValueError('Incomplete stream')
 
-with metrics_placeholder.container():
-    metrics = st.session_state.last_metrics
-    if metrics is None:
-        st.info('Last call failed; metrics unavailable.' if st.session_state.last_call_failed
-                else 'No completed call yet.')
+
+st.set_page_config(page_title='CAG Estimator', page_icon='📋')
+st.title('CAG Estimator')
+st.caption('Describe your project to estimate its scope, hours and costs.')
+st.caption('Your description is sent to the configured API and its model provider. Avoid sensitive data.')
+
+with st.form('estimation'):
+    description = st.text_area('Project description', max_chars=2000)
+    project_type = st.selectbox('Project type', [item.value for item in ProjectType])
+    detail_level = st.selectbox('Detail level', [item.value for item in DetailLevel])
+    output_format = st.selectbox('Output format', [item.value for item in OutputFormat])
+    submitted = st.form_submit_button('Estimate')
+
+display = st.empty()
+if 'last_estimate' in st.session_state:
+    display.markdown(st.session_state['last_estimate']['text'])
+
+if submitted:
+    try:
+        request = EstimationRequest(description=description, project_type=project_type,
+                                    detail_level=detail_level, output_format=output_format)
+    except ValidationError:
+        st.error('The project description must contain between 20 and 2000 characters.')
     else:
-        st.metric('Model', metrics.model or 'Not available')
-        st.metric('Input tokens', metrics.input_tokens if metrics.input_tokens is not None
-                  else 'Not available')
-        st.metric('Output tokens', metrics.output_tokens if metrics.output_tokens is not None
-                  else 'Not available')
-        st.metric('Response time', f'{metrics.elapsed_seconds:.2f} s'
-                  if metrics.elapsed_seconds is not None else 'Not available')
+        try:
+            url = os.environ.get('ESTIMATOR_API_URL', 'http://127.0.0.1:8000').rstrip('/')
+            with httpx.stream('POST', url + '/api/v1/estimate/stream',
+                              json=request.model_dump(mode='json'), timeout=45.0) as response:
+                result = receive_estimate(response, display)
+            st.session_state['last_estimate'] = result
+        except (httpx.HTTPError, ValueError):
+            if 'last_estimate' in st.session_state:
+                display.markdown(st.session_state['last_estimate']['text'])
+            else:
+                display.empty()
+            st.error('Unable to obtain an estimate from the API. Check the service and try again.')
+
+if 'last_estimate' in st.session_state:
+    st.caption(f"Prompt version: {st.session_state['last_estimate']['prompt_version']}")

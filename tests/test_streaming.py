@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 from openai import APIConnectionError
 import httpx
@@ -60,6 +61,83 @@ def test_stream_yields_deltas_and_sends_shared_prompt_with_history(monkeypatch):
     assert factory.call_args.kwargs['max_retries'] == 0
     stream.__aexit__.assert_awaited_once()
     context.__aexit__.assert_awaited_once()
+
+
+def test_stream_uses_custom_system_prompt_without_mutating_history(monkeypatch):
+    _, create, context, stream = fake_stream(monkeypatch, ['Estimate'])
+    history = [{'role': 'user', 'content': 'A portal'}]
+
+    async def consume():
+        return [part async for part in llm_service.stream_estimate(
+            history, settings(), system='Custom instructions')]
+
+    assert asyncio.run(consume()) == ['Estimate']
+    assert create.call_args.kwargs['messages'] == [
+        {'role': 'system', 'content': 'Custom instructions'}, *history]
+    assert history == [{'role': 'user', 'content': 'A portal'}]
+    stream.__aexit__.assert_awaited_once()
+    context.__aexit__.assert_awaited_once()
+
+
+def test_stream_closes_provider_resources_when_consumer_closes(monkeypatch):
+    _, _, context, stream = fake_stream(monkeypatch, ['Partial', 'rest'])
+    metrics = llm_service.CallMetrics()
+
+    async def consume():
+        output = llm_service.stream_estimate([], settings(), metrics=metrics)
+        assert await anext(output) == 'Partial'
+        await output.aclose()
+
+    asyncio.run(consume())
+    stream.__aexit__.assert_awaited_once()
+    context.__aexit__.assert_awaited_once()
+    assert metrics == llm_service.CallMetrics()
+
+
+def test_prefetch_cancellation_completes_async_provider_cleanup(monkeypatch):
+    closed = []
+    metrics = llm_service.CallMetrics()
+
+    async def exercise():
+        started = anyio.Event()
+
+        class Stream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                await anyio.sleep(0)
+                closed.append('stream')
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                started.set()
+                await anyio.sleep_forever()
+
+        class Client:
+            async def __aenter__(self):
+                return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=AsyncMock(return_value=Stream()))))
+
+            async def __aexit__(self, *args):
+                await anyio.sleep(0)
+                closed.append('client')
+
+        monkeypatch.setattr(llm_service, 'AsyncOpenAI', lambda **kwargs: Client())
+
+        async def consume():
+            await anext(llm_service.stream_estimate([], settings(), metrics=metrics))
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(consume)
+            await started.wait()
+            group.cancel_scope.cancel()
+
+    anyio.run(exercise)
+    assert closed == ['stream', 'client']
+    assert metrics == llm_service.CallMetrics()
 
 
 @pytest.mark.parametrize('parts', [[], [None, '', '  ']])

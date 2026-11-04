@@ -1,130 +1,165 @@
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import Mock
 
+import httpx
+import pytest
+from streamlit.delta_generator import DeltaGenerator
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = Path(__file__).resolve().parents[1] / 'streamlit_app.py'
+DESCRIPTION = 'A customer portal for scheduling appointments'
+ERROR = 'Unable to obtain an estimate from the API. Check the service and try again.'
 
-from app.services import llm_service
+
+@pytest.fixture(autouse=True)
+def prevent_non_streaming_requests(monkeypatch):
+    monkeypatch.setattr(httpx, 'post', Mock(side_effect=AssertionError('Unexpected non-streaming request')))
 
 
-def test_chat_streams_and_retains_followup_history(monkeypatch):
-    calls = []
+class ByteStream(httpx.SyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.closed = False
 
-    async def stream(messages, settings, *, metrics=None):
-        calls.append([dict(message) for message in messages])
-        yield 'Estimate: '
-        yield '42 hours'
+    def __iter__(self):
+        for chunk in self.chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield chunk
 
-    monkeypatch.setattr(llm_service, 'stream_estimate', stream, raising=False)
+    def close(self):
+        self.closed = True
+
+
+def response(chunks, status=200, content_type='text/event-stream'):
+    body = ByteStream(chunks)
+    result = httpx.Response(status, headers={'content-type': content_type}, stream=body,
+                            request=httpx.Request('POST', 'http://example.test'))
+    return result, body
+
+
+def submit(app):
+    app.text_area[0].set_value(DESCRIPTION)
+    return app.button[0].click().run()
+
+
+def test_form_streams_typed_request_and_displays_progress(monkeypatch):
+    updates = []
+    original_markdown = DeltaGenerator.markdown
+
+    def track_markdown(self, body, *args, **kwargs):
+        updates.append(body)
+        return original_markdown(self, body, *args, **kwargs)
+
+    monkeypatch.setattr(DeltaGenerator, 'markdown', track_markdown)
+    # Split UTF-8 and event framing across network chunks. The second data field
+    # joins with a newline to form one valid JSON object.
+    chunks = [b'event: metadata\r\ndata: {"prompt_version": "v1"}\r\n\r\n',
+              b'event: delta\ndata: {"text": "Caf\xc3', b'\xa9\\n"}\n\n',
+              b'event: delta\ndata: {\ndata: "text": "fin"}\n\n',
+              b'event: done\ndata: {}\n\n']
+    result, body = response(chunks)
+    stream = Mock(return_value=closing(result))
+    monkeypatch.setattr(httpx, 'stream', stream)
     app = AppTest.from_file(APP_PATH).run()
+    app.text_area[0].set_value(DESCRIPTION)
+    app.selectbox[0].select('web_saas')
+    app.selectbox[1].select('detailed')
+    app.selectbox[2].select('narrative')
+    app.button[0].click().run()
+
     assert not app.exception
-    app.chat_input[0].set_value('A customer portal').run()
-    assert not app.exception
-    assert app.session_state['messages'] == [
-        {'role': 'user', 'content': 'A customer portal'},
-        {'role': 'assistant', 'content': 'Estimate: 42 hours'},
-    ]
-    assert [message.name for message in app.chat_message] == ['user', 'assistant']
-    assert app.chat_message[1].markdown[0].value == 'Estimate: 42 hours'
-    app.chat_input[0].set_value('Include HubSpot').run()
-    assert not app.exception
-    assert calls[1] == [
-        {'role': 'user', 'content': 'A customer portal'},
-        {'role': 'assistant', 'content': 'Estimate: 42 hours'},
-        {'role': 'user', 'content': 'Include HubSpot'},
-    ]
+    stream.assert_called_once()
+    assert stream.call_args.args[:2] == ('POST', 'http://127.0.0.1:8000/api/v1/estimate/stream')
+    assert stream.call_args.kwargs['json'] == {
+        'description': DESCRIPTION, 'project_type': 'web_saas',
+        'detail_level': 'detailed', 'output_format': 'narrative'}
+    assert 'Café\n' in updates
+    assert 'Café\nfin' in updates
+    assert updates.index('Café\n') < updates.index('Café\nfin')
+    assert [item.value for item in app.markdown].count('Café\nfin') == 1
+    assert 'Prompt version: v1' in [item.value for item in app.caption]
+    assert body.closed
+
+
+def test_result_survives_rerun(monkeypatch):
+    result, body = response([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+                             b'event: delta\ndata: {"text":"Estimate: 42 hours"}\n\n'
+                             b'event: done\ndata: {}\n\n'])
+    stream = Mock(return_value=closing(result))
+    monkeypatch.setattr(httpx, 'stream', stream)
+    app = submit(AppTest.from_file(APP_PATH).run())
     app.run()
-    assert len(app.chat_message) == 4
-    assert len(calls) == 2
+    assert not app.exception
+    assert [item.value for item in app.markdown].count('Estimate: 42 hours') == 1
+    assert app.session_state['last_estimate'] == {'text': 'Estimate: 42 hours', 'prompt_version': 'v1'}
+    stream.assert_called_once()
+    assert body.closed
 
 
-def test_failed_stream_does_not_store_partial_assistant_or_failed_turn(monkeypatch):
-    async def stream(messages, settings, *, metrics=None):
-        yield 'Partial output'
-        raise llm_service.EstimationError(502, 'Estimation provider unavailable. Try again later.')
-
-    monkeypatch.setattr(llm_service, 'stream_estimate', stream, raising=False)
+@pytest.mark.parametrize('description', ['short', ' ' * 20])
+def test_invalid_description_does_not_post(monkeypatch, description):
+    stream = Mock()
+    monkeypatch.setattr(httpx, 'stream', stream)
     app = AppTest.from_file(APP_PATH).run()
-    app.chat_input[0].set_value('A portal').run()
+    app.session_state['last_estimate'] = {'text': 'Previous estimate', 'prompt_version': 'v1'}
+    app.text_area[0].set_value(description)
+    app.button[0].click().run()
+    stream.assert_not_called()
     assert not app.exception
-    assert app.error[0].value == 'Estimation provider unavailable. Try again later.'
-    assert app.session_state['messages'] == []
-    app.run()
-    assert len(app.chat_message) == 0
+    assert app.error
+    assert app.session_state['last_estimate']['text'] == 'Previous estimate'
+    assert 'Previous estimate' in [item.value for item in app.markdown]
 
 
-def test_blank_input_does_not_call_provider(monkeypatch):
-    async def stream(messages, settings, *, metrics=None):
-        raise AssertionError('Provider must not be called')
-        yield
-
-    monkeypatch.setattr(llm_service, 'stream_estimate', stream, raising=False)
+@pytest.mark.parametrize('chunks,status,content_type', [
+    ([b'{"detail":"private diagnostics"}'], 503, 'application/json'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":"partial"}\n\n'
+      b'event: error\ndata: {"detail":"private diagnostics"}\n\n'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":"partial"}\n\n'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":"partial"}\n\n'
+      b'event: done\ndata: {}'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: not-json\n\n'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":123}\n\n'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":"\xff"}\n\n'
+      b'event: done\ndata: {}\n\n'], 200, 'text/event-stream'),
+    ([b'event: delta\ndata: {"text":"partial"}\n\n'
+      b'event: done\ndata: {}\n\n'], 200, 'text/event-stream'),
+    ([b'event: metadata\ndata: {"prompt_version":"v1"}\n\n'
+      b'event: delta\ndata: {"text":"partial"}\n\n',
+      httpx.ReadError('private diagnostics')], 200, 'text/event-stream'),
+    ([b'not an event stream'], 200, 'application/json'),
+])
+def test_failed_stream_preserves_previous_result_and_closes(monkeypatch, chunks, status, content_type):
+    result, body = response(chunks, status, content_type)
+    monkeypatch.setattr(httpx, 'stream', Mock(return_value=closing(result)))
     app = AppTest.from_file(APP_PATH).run()
-    app.chat_input[0].set_value('   ').run()
+    previous = {'text': 'Previous estimate', 'prompt_version': 'v1'}
+    app.session_state['last_estimate'] = previous.copy()
+    submit(app)
     assert not app.exception
-    assert app.session_state['messages'] == []
+    assert [item.value for item in app.error] == [ERROR]
+    assert app.session_state['last_estimate'] == previous
+    assert [item.value for item in app.markdown].count('Previous estimate') == 1
+    assert 'partial' not in [item.value for item in app.markdown]
+    assert 'private diagnostics' not in str(app)
+    assert body.closed
 
 
-def test_sidebar_shows_exact_readonly_cag_context():
-    from app.prompts import SYSTEM_PROMPT
-    from app.context.examples import render_examples
-
+def test_connection_error_is_safe_and_preserves_previous_result(monkeypatch):
+    monkeypatch.setattr(httpx, 'stream', Mock(side_effect=httpx.ConnectError('private diagnostics')))
     app = AppTest.from_file(APP_PATH).run()
+    previous = {'text': 'Previous estimate', 'prompt_version': 'v1'}
+    app.session_state['last_estimate'] = previous.copy()
+    submit(app)
     assert not app.exception
-    # st.code strips surrounding whitespace when serializing its display value.
-    assert [block.value for block in app.sidebar.code] == [
-        SYSTEM_PROMPT.strip(), render_examples().strip(),
-    ]
-    assert not app.sidebar.text_input
-    assert not app.sidebar.text_area
-    assert 'No completed call yet.' in [item.value for item in app.sidebar.info]
-
-
-def test_sidebar_metrics_update_persist_and_clear_on_failure(monkeypatch):
-    calls = 0
-
-    async def stream(messages, settings, *, metrics=None):
-        nonlocal calls
-        calls += 1
-        if calls == 3:
-            raise llm_service.EstimationError(502, 'Estimation provider unavailable. Try again later.')
-        metrics.model = 'gpt-4o-mini'
-        metrics.input_tokens = calls * 100
-        metrics.output_tokens = calls * 10
-        metrics.elapsed_seconds = calls * 1.25
-        yield 'Estimate'
-
-    monkeypatch.setattr(llm_service, 'stream_estimate', stream)
-    app = AppTest.from_file(APP_PATH).run()
-    app.chat_input[0].set_value('A portal').run()
-    assert not app.exception
-    assert [(m.label, m.value) for m in app.sidebar.metric] == [
-        ('Model', 'gpt-4o-mini'), ('Input tokens', '100'),
-        ('Output tokens', '10'), ('Response time', '1.25 s'),
-    ]
-    app.run()
-    assert app.sidebar.metric[1].value == '100'
-    app.chat_input[0].set_value('Add HubSpot').run()
-    assert app.sidebar.metric[1].value == '200'
-    assert app.sidebar.metric[2].value == '20'
-    app.chat_input[0].set_value('Fail this request').run()
-    assert not app.exception
-    assert not app.sidebar.metric
-    assert 'Last call failed; metrics unavailable.' in [item.value for item in app.sidebar.info]
-    assert len(app.session_state['messages']) == 4
-    app.run()
-    assert not app.sidebar.metric
-
-
-def test_sidebar_does_not_invent_missing_token_usage(monkeypatch):
-    async def stream(messages, settings, *, metrics=None):
-        metrics.model = 'gpt-4o-mini'
-        metrics.elapsed_seconds = 0.5
-        yield 'Estimate'
-
-    monkeypatch.setattr(llm_service, 'stream_estimate', stream)
-    app = AppTest.from_file(APP_PATH).run()
-    app.chat_input[0].set_value('A portal').run()
-    assert not app.exception
-    assert app.sidebar.metric[1].value == 'Not available'
-    assert app.sidebar.metric[2].value == 'Not available'
+    assert [item.value for item in app.error] == [ERROR]
+    assert app.session_state['last_estimate'] == previous
+    assert 'private diagnostics' not in str(app)
