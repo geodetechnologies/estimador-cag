@@ -18,3 +18,13 @@ def render_estimation_prompt(request: EstimationRequest, version: str = 'v1') ->
     context = request.model_dump(mode='json') | {'examples_template': f'estimation/{version}/examples.j2'}
     return tuple(_environment.get_template(f'estimation/{version}/{name}.j2').render(**context)
                  for name in ('system', 'user'))
+
+
+def render_session_estimation_system() -> str:
+    """Reuse estimation instructions without assuming a project type."""
+    return _environment.get_template('metadata/session-estimation.j2').render()
+
+
+def render_metadata_prompt() -> str:
+    """Render the dedicated project fact extractor prompt."""
+    return _environment.get_template('metadata/system.j2').render()

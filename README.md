@@ -36,6 +36,36 @@ curl http://127.0.0.1:8000/api/v1/estimate \
 
 A successful response has `result`, `prompt_version` and `cached` (currently always `false`; no cache is implemented). `result` contains `summary`, `confidence_pct`, `phases` (each with `name`, `duration_weeks`, `cost_eur` and `summary`), `total_duration_weeks` and `total_cost_eur`. Phase costs must sum to the total; confidence below 30 requires the summary to begin with `Out of scope:`. Invalid provider results return HTTP 502. The previous `text` response is no longer supported; clients must migrate. `project_type` accepts `mobile_app`, `web_saas`, `internal_tool`, or `data_pipeline`; `detail_level` accepts `summary`, `medium`, or `detailed`; `output_format` accepts `phases_table`, `line_items`, or `narrative`. Descriptions must have 20–2000 characters and cannot consist only of whitespace. Invalid requests return HTTP 422.
 
+### Conversational estimates
+
+Create an in-process session with `POST /sessions`, then send multipart form data to
+`POST /sessions/{session_id}/estimate` with a `transcript` field and zero or more
+`attachments` fields. For example:
+
+```sh
+curl -X POST http://127.0.0.1:8000/sessions
+curl -X POST http://127.0.0.1:8000/sessions/SESSION_ID/estimate \
+  -F 'transcript=Estimate this project' -F 'attachments=@brief.pdf'
+```
+
+The response contains the same structured `result`, `prompt_version` and `cached`
+fields as the existing endpoint, plus `project_metadata` (`project_name`,
+`assumed_team_size`, `mentioned_technologies`, `agreed_scope`). Each completed turn
+is a user/assistant pair; six pairs are retained by default. Set the positive integer
+`MAX_TURNS` to change that limit. Each estimation prompt includes at most
+`MAX_TURNS - 1` completed pairs plus the current user message. Metadata is kept
+separately and included in a `<project_metadata>` block in each estimation prompt.
+A second LLM call extracts updated metadata from the previous facts and the latest
+turn. Both calls must succeed before the turn and metadata are saved.
+
+PDF text is extracted locally with `pypdf` and DOCX text with `python-docx`; each
+attachment is appended to the transcript under a filename separator before it is
+sent to the provider. Image-only PDFs need OCR, which is not provided. Each file
+is limited to 10 MiB; unreadable or unsupported files return HTTP 422. Unknown
+sessions return 404. Sessions are volatile, live only in one server process, and
+are lost on restart; they are not shared between workers. Uploaded content and
+metadata are sent to the provider, so avoid sensitive information.
+
 ### Stream an estimate
 
 `POST /api/v1/estimate/stream` accepts the same JSON request and validation rules as the non-streaming endpoint. For incremental output, disable curl buffering:

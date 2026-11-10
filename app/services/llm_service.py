@@ -26,7 +26,8 @@ class EstimationError(Exception):
 
 
 async def estimate(transcription: str, settings: Settings, *, system: str = SYSTEM_PROMPT,
-                   json_output: bool = False) -> str:
+                   json_output: bool = False,
+                   history: list[dict[str, str]] | None = None) -> str:
     """Request an estimate with a per-call async client that closes on exit.
 
     Static system context and untrusted user text remain separate messages;
@@ -50,6 +51,7 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
                 **({'response_format': {'type': 'json_object'}} if json_output else {}),
                 messages=[
                     {'role': 'system', 'content': system},
+                    *(history or []),
                     {'role': 'user', 'content': transcription},
                 ],
             )
@@ -66,14 +68,17 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
     return content.strip()
 
 
-async def structured_estimate(transcription: str, settings: Settings, *, system: str) -> EstimationResult:
+async def structured_estimate(transcription: str, settings: Settings, *, system: str,
+                              history: list[dict[str, str]] | None = None) -> EstimationResult:
     """Validate provider JSON and enforce business rules before returning it."""
     schema = EstimationResult.model_json_schema()
     instructions = (f'\nReturn a JSON object matching this schema: {json.dumps(schema)}. '
                     'The total_cost_eur must equal the sum of phase costs. '
                     'When confidence_pct is below 30, summary must start with Out of scope:. '
                     'Provide phases before totals. All monetary amounts are in euros.')
-    result = await estimate(transcription, settings, system=system + instructions, json_output=True)
+    options = {'history': history} if history is not None else {}
+    result = await estimate(transcription, settings, system=system + instructions,
+                            json_output=True, **options)
     try:
         return EstimationResult.model_validate_json(result)
     except ValidationError:
