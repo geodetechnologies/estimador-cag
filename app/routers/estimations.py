@@ -23,10 +23,10 @@ async def estimate(
 ) -> EstimationResponse:
     system, user = render_estimation_prompt(payload)
     try:
-        result = await llm_service.estimate(user, settings, system=system)
+        result = await llm_service.structured_estimate(user, settings, system=system)
     except llm_service.EstimationError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from None
-    return EstimationResponse(text=result, prompt_version='v1')
+    return EstimationResponse(result=result, prompt_version='v1')
 
 
 _SAFE_ERROR = 'Estimation provider unavailable. Try again later.'

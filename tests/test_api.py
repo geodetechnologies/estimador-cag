@@ -43,17 +43,21 @@ def test_missing_key(client):
 
 
 def test_success(client, monkeypatch):
-    estimate = AsyncMock(return_value='Estimación: 20 horas')
-    monkeypatch.setattr(llm_service, 'estimate', estimate)
+    result = {'summary': 'Estimación de proyecto', 'confidence_pct': 80,
+              'phases': [{'name': 'Desarrollo', 'duration_weeks': 2, 'cost_eur': 500,
+                          'summary': 'Desarrollo del proyecto'}],
+              'total_duration_weeks': 2, 'total_cost_eur': 500}
+    estimate = AsyncMock(return_value=result)
+    monkeypatch.setattr(llm_service, 'structured_estimate', estimate)
     response = client.post('/api/v1/estimate', json=payload)
     assert response.status_code == 200
-    assert response.json() == {'text': 'Estimación: 20 horas', 'prompt_version': 'v1'}
+    assert response.json() == {'result': result, 'prompt_version': 'v1', 'cached': False}
     assert payload['description'] in estimate.call_args.args[0]
     assert estimate.call_args.kwargs['system']
 
 
 def test_safe_service_error(client, monkeypatch):
-    monkeypatch.setattr(llm_service, 'estimate', AsyncMock(
+    monkeypatch.setattr(llm_service, 'structured_estimate', AsyncMock(
         side_effect=llm_service.EstimationError(502, 'Provider unavailable.')))
     response = client.post('/api/v1/estimate', json=payload)
     assert response.status_code == 502

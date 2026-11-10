@@ -1,6 +1,6 @@
 # CAG Estimator
 
-A FastAPI and Streamlit software-estimation app. A typed form sends project parameters to the API, which renders versioned Jinja2 prompts and requests a free-text estimate from OpenAI. Project descriptions are sent to the model provider; avoid sensitive information.
+A FastAPI and Streamlit software-estimation app. A typed form sends project parameters to the API, which renders versioned Jinja2 prompts and requests estimates from OpenAI. The non-streaming endpoint validates structured results; the streaming endpoint returns free text. Project descriptions are sent to the model provider; avoid sensitive information.
 
 ## Run locally
 
@@ -34,7 +34,7 @@ curl http://127.0.0.1:8000/api/v1/estimate \
   -d '{"description":"A customer portal for scheduling appointments", "project_type":"web_saas", "detail_level":"summary", "output_format":"narrative"}'
 ```
 
-A successful response has `text` and `prompt_version`. The previous `transcription` request and `estimation` response contract is no longer supported; clients must migrate to the fields shown above. `project_type` accepts `mobile_app`, `web_saas`, `internal_tool`, or `data_pipeline`; `detail_level` accepts `summary`, `medium`, or `detailed`; `output_format` accepts `phases_table`, `line_items`, or `narrative`. Descriptions must have 20–2000 characters and cannot consist only of whitespace. Invalid requests return HTTP 422.
+A successful response has `result`, `prompt_version` and `cached` (currently always `false`; no cache is implemented). `result` contains `summary`, `confidence_pct`, `phases` (each with `name`, `duration_weeks`, `cost_eur` and `summary`), `total_duration_weeks` and `total_cost_eur`. Phase costs must sum to the total; confidence below 30 requires the summary to begin with `Out of scope:`. Invalid provider results return HTTP 502. The previous `text` response is no longer supported; clients must migrate. `project_type` accepts `mobile_app`, `web_saas`, `internal_tool`, or `data_pipeline`; `detail_level` accepts `summary`, `medium`, or `detailed`; `output_format` accepts `phases_table`, `line_items`, or `narrative`. Descriptions must have 20–2000 characters and cannot consist only of whitespace. Invalid requests return HTTP 422.
 
 ### Stream an estimate
 
@@ -70,4 +70,4 @@ uv run --frozen --extra dev pytest -q
 uv run --frozen --extra dev pytest -q tests/prompts/test_estimation_v1.py
 ```
 
-The tests mock provider calls and need no API key. Template tests verify rendered instructions, not the quality, correctness or safety of model output. The app does not provide authentication, application rate limiting or output guardrails; do not expose it publicly without appropriate controls.
+The tests mock provider calls and need no API key. Template tests verify rendered instructions, not the quality, correctness or safety of model output. The app does not provide authentication or application rate limiting; structured output validation does not guarantee an accurate or safe estimate. Do not expose it publicly without appropriate controls.

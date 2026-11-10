@@ -1,5 +1,6 @@
 """Combine static context with user text and translate provider failures safely."""
 
+import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,9 +9,11 @@ from time import perf_counter
 
 import anyio
 from openai import AsyncOpenAI, OpenAIError, APITimeoutError, RateLimitError
+from pydantic import ValidationError
 
 from app.config import Settings
 from app.prompts import SYSTEM_PROMPT
+from app.schemas import EstimationResult
 
 
 class EstimationError(Exception):
@@ -22,7 +25,8 @@ class EstimationError(Exception):
         self.detail = detail
 
 
-async def estimate(transcription: str, settings: Settings, *, system: str = SYSTEM_PROMPT) -> str:
+async def estimate(transcription: str, settings: Settings, *, system: str = SYSTEM_PROMPT,
+                   json_output: bool = False) -> str:
     """Request an estimate with a per-call async client that closes on exit.
 
     Static system context and untrusted user text remain separate messages;
@@ -43,6 +47,7 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
         ) as client:
             response = await client.chat.completions.create(
                 model=settings.openai_model,
+                **({'response_format': {'type': 'json_object'}} if json_output else {}),
                 messages=[
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': transcription},
@@ -59,6 +64,20 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
     if not content or not content.strip():
         raise EstimationError(502, 'Estimation provider returned an empty result.')
     return content.strip()
+
+
+async def structured_estimate(transcription: str, settings: Settings, *, system: str) -> EstimationResult:
+    """Validate provider JSON and enforce business rules before returning it."""
+    schema = EstimationResult.model_json_schema()
+    instructions = (f'\nReturn a JSON object matching this schema: {json.dumps(schema)}. '
+                    'The total_cost_eur must equal the sum of phase costs. '
+                    'When confidence_pct is below 30, summary must start with Out of scope:. '
+                    'Provide phases before totals. All monetary amounts are in euros.')
+    result = await estimate(transcription, settings, system=system + instructions, json_output=True)
+    try:
+        return EstimationResult.model_validate_json(result)
+    except ValidationError:
+        raise EstimationError(502, 'Estimation provider returned an invalid result.') from None
 
 
 @asynccontextmanager
