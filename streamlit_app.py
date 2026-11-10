@@ -8,7 +8,8 @@ import httpx
 import streamlit as st
 from pydantic import ValidationError
 
-from app.schemas import DetailLevel, EstimationRequest, OutputFormat, ProjectType
+from app.schemas import DetailLevel, EstimationRequest, EstimationResponse, OutputFormat, ProjectType
+from app.sessions import ProjectMetadata
 
 
 def stream_lines(response):
@@ -114,3 +115,66 @@ if submitted:
 
 if 'last_estimate' in st.session_state:
     st.caption(f"Prompt version: {st.session_state['last_estimate']['prompt_version']}")
+
+
+st.header('Conversational estimate')
+st.caption('Send each transcript with optional PDF or DOCX attachments. Each turn builds on this conversation.')
+url = os.environ.get('ESTIMATOR_API_URL', 'http://127.0.0.1:8000').rstrip('/')
+
+
+def start_conversation():
+    """Replace local conversation state only after the server creates a session."""
+    try:
+        response = httpx.post(url + '/sessions', timeout=45.0)
+        response.raise_for_status()
+        session_id = response.json()['session_id']
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError('Invalid session ID')
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        st.error('Unable to create a conversation. Check the service and try again.')
+        return
+    st.session_state['session_id'] = session_id
+    st.session_state['project_metadata'] = ProjectMetadata().model_dump()
+    st.session_state.pop('conversation_estimate', None)
+    st.session_state['conversation_transcript'] = ''
+    st.session_state['upload_generation'] = st.session_state.get('upload_generation', 0) + 1
+
+
+if 'conversation_initialized' not in st.session_state:
+    st.session_state['conversation_initialized'] = True
+    start_conversation()
+
+if st.button('Nueva conversación'):
+    start_conversation()
+
+with st.form('conversation'):
+    transcript = st.text_area('Transcript', key='conversation_transcript')
+    attachments = st.file_uploader('Attachments (PDF or DOCX)', type=['pdf', 'docx'],
+                                   accept_multiple_files=True,
+                                   key=f"conversation_upload_{st.session_state.get('upload_generation', 0)}")
+    conversation_submitted = st.form_submit_button('Estimate conversation',
+                                                    disabled='session_id' not in st.session_state)
+
+if conversation_submitted and 'session_id' in st.session_state:
+    try:
+        files = [('attachments', (file.name, file.getvalue(), file.type)) for file in attachments]
+        response = httpx.post(f"{url}/sessions/{st.session_state['session_id']}/estimate",
+                              data={'transcript': transcript}, files=files, timeout=45.0)
+        response.raise_for_status()
+        payload = response.json()
+        estimate = EstimationResponse.model_validate(payload)
+        metadata = ProjectMetadata.model_validate(payload['project_metadata'])
+        if metadata.model_fields_set != set(ProjectMetadata.model_fields):
+            raise ValueError('Incomplete metadata')
+        st.session_state['conversation_estimate'] = estimate.model_dump(mode='json')
+        st.session_state['project_metadata'] = metadata.model_dump(mode='json')
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        st.error('Unable to obtain an estimate from the API. Check the service and try again.')
+
+if 'conversation_estimate' in st.session_state:
+    st.subheader('Conversation estimate')
+    st.json(st.session_state['conversation_estimate']['result'])
+    st.caption(f"Prompt version: {st.session_state['conversation_estimate']['prompt_version']}")
+
+with st.expander('Project metadata', expanded=True):
+    st.json(st.session_state.get('project_metadata', ProjectMetadata().model_dump()))

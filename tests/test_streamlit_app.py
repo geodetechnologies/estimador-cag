@@ -13,8 +13,13 @@ ERROR = 'Unable to obtain an estimate from the API. Check the service and try ag
 
 
 @pytest.fixture(autouse=True)
-def prevent_non_streaming_requests(monkeypatch):
-    monkeypatch.setattr(httpx, 'post', Mock(side_effect=AssertionError('Unexpected non-streaming request')))
+def allow_session_creation_only(monkeypatch):
+    def create_session(url, **kwargs):
+        assert url == 'http://127.0.0.1:8000/sessions'
+        return httpx.Response(200, json={'session_id': 'test-session'},
+                              request=httpx.Request('POST', url))
+
+    monkeypatch.setattr(httpx, 'post', Mock(side_effect=create_session))
 
 
 class ByteStream(httpx.SyncByteStream):

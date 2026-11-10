@@ -24,7 +24,9 @@ In another terminal, start the form:
 uv run streamlit run streamlit_app.py
 ```
 
-Open the Streamlit URL printed in the terminal (usually <http://localhost:8501>). The form progressively displays estimates from `http://127.0.0.1:8000/api/v1/estimate/stream` by default; set `ESTIMATOR_API_URL` to another API base URL if needed. A failed or incomplete stream shows an error and retains the last completed estimate for the current session. The API must be running separately. Use `uv run python -m app --reload` for development. `/health` and `/docs` are available without an API key; estimation returns 503 when the key is missing.
+Open the Streamlit URL printed in the terminal (usually <http://localhost:8501>). The original form progressively displays estimates from `http://127.0.0.1:8000/api/v1/estimate/stream` by default; set `ESTIMATOR_API_URL` to another API base URL if needed. A failed or incomplete stream shows an error and retains the last completed estimate for the current browser session. The API must be running separately. Use `uv run python -m app --reload` for development. `/health` and `/docs` are available without an API key; estimation returns 503 when the key is missing.
+
+The conversational form creates a server session on page load. Enter a transcript, optionally select multiple PDF or DOCX files, and select **Estimate conversation**; the structured result and current project metadata appear below. Subsequent submissions continue the same conversation. **Nueva conversación** starts a fresh session and clears its transcript, attachments, result and metadata; the original streaming form is separate. If creating a session or estimating fails, an error is shown and the previous conversation result and metadata are retained. Use **Nueva conversación** to retry session creation or recover from a server restart. Uploaded files stay selected until changed or the conversation is reset, so remove them if they should not be sent again.
 
 ## API
 
