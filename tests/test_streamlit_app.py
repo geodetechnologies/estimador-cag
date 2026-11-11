@@ -44,6 +44,12 @@ def response(chunks, status=200, content_type='text/event-stream'):
     return result, body
 
 
+def legacy_app():
+    app = AppTest.from_file(APP_PATH)
+    app.session_state['show_legacy_estimation_form'] = True
+    return app
+
+
 def submit(app):
     app.text_area[0].set_value(DESCRIPTION)
     return app.button[0].click().run()
@@ -67,7 +73,7 @@ def test_form_streams_typed_request_and_displays_progress(monkeypatch):
     result, body = response(chunks)
     stream = Mock(return_value=closing(result))
     monkeypatch.setattr(httpx, 'stream', stream)
-    app = AppTest.from_file(APP_PATH).run()
+    app = legacy_app().run()
     app.text_area[0].set_value(DESCRIPTION)
     app.selectbox[0].select('web_saas')
     app.selectbox[1].select('detailed')
@@ -94,7 +100,7 @@ def test_result_survives_rerun(monkeypatch):
                              b'event: done\ndata: {}\n\n'])
     stream = Mock(return_value=closing(result))
     monkeypatch.setattr(httpx, 'stream', stream)
-    app = submit(AppTest.from_file(APP_PATH).run())
+    app = submit(legacy_app().run())
     app.run()
     assert not app.exception
     assert [item.value for item in app.markdown].count('Estimate: 42 hours') == 1
@@ -107,7 +113,7 @@ def test_result_survives_rerun(monkeypatch):
 def test_invalid_description_does_not_post(monkeypatch, description):
     stream = Mock()
     monkeypatch.setattr(httpx, 'stream', stream)
-    app = AppTest.from_file(APP_PATH).run()
+    app = legacy_app().run()
     app.session_state['last_estimate'] = {'text': 'Previous estimate', 'prompt_version': 'v1'}
     app.text_area[0].set_value(description)
     app.button[0].click().run()
@@ -145,7 +151,7 @@ def test_invalid_description_does_not_post(monkeypatch, description):
 def test_failed_stream_preserves_previous_result_and_closes(monkeypatch, chunks, status, content_type):
     result, body = response(chunks, status, content_type)
     monkeypatch.setattr(httpx, 'stream', Mock(return_value=closing(result)))
-    app = AppTest.from_file(APP_PATH).run()
+    app = legacy_app().run()
     previous = {'text': 'Previous estimate', 'prompt_version': 'v1'}
     app.session_state['last_estimate'] = previous.copy()
     submit(app)
@@ -160,7 +166,7 @@ def test_failed_stream_preserves_previous_result_and_closes(monkeypatch, chunks,
 
 def test_connection_error_is_safe_and_preserves_previous_result(monkeypatch):
     monkeypatch.setattr(httpx, 'stream', Mock(side_effect=httpx.ConnectError('private diagnostics')))
-    app = AppTest.from_file(APP_PATH).run()
+    app = legacy_app().run()
     previous = {'text': 'Previous estimate', 'prompt_version': 'v1'}
     app.session_state['last_estimate'] = previous.copy()
     submit(app)

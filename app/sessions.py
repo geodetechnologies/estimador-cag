@@ -18,6 +18,8 @@ class ProjectMetadata(BaseModel):
     assumed_team_size: int | None = Field(default=None, ge=1)
     mentioned_technologies: list[str] = Field(default_factory=list)
     agreed_scope: list[str] = Field(default_factory=list)
+    explicit_constraints: list[str] = Field(default_factory=list)
+    rejected_options: list[str] = Field(default_factory=list)
 
 
 class ConversationHistory:

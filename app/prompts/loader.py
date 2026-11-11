@@ -5,6 +5,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from app.schemas import EstimationRequest
+from app.sessions import ProjectMetadata
 
 _environment = Environment(
     loader=FileSystemLoader(Path(__file__).parent),
@@ -20,9 +21,10 @@ def render_estimation_prompt(request: EstimationRequest, version: str = 'v1') ->
                  for name in ('system', 'user'))
 
 
-def render_session_estimation_system() -> str:
-    """Reuse estimation instructions without assuming a project type."""
-    return _environment.get_template('metadata/session-estimation.j2').render()
+def render_session_estimation_system(project_metadata: ProjectMetadata) -> str:
+    """Reuse estimation instructions and render session facts as untrusted data."""
+    return _environment.get_template('metadata/session-estimation.j2').render(
+        project_metadata=project_metadata)
 
 
 def render_metadata_prompt() -> str:

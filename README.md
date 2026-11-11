@@ -1,6 +1,6 @@
 # CAG Estimator
 
-A FastAPI and Streamlit software-estimation app. A typed form sends project parameters to the API, which renders versioned Jinja2 prompts and requests estimates from OpenAI. The non-streaming endpoint validates structured results; the streaming endpoint returns free text. Project descriptions are sent to the model provider; avoid sensitive information.
+A FastAPI and Streamlit software-estimation app. The conversational form sends transcripts and optional attachments to the API, which renders versioned prompts and requests estimates from OpenAI. The non-streaming endpoint validates structured results; the streaming endpoint returns free text. Project descriptions are sent to the model provider; avoid sensitive information.
 
 ## Run locally
 
@@ -24,9 +24,9 @@ In another terminal, start the form:
 uv run streamlit run streamlit_app.py
 ```
 
-Open the Streamlit URL printed in the terminal (usually <http://localhost:8501>). The original form progressively displays estimates from `http://127.0.0.1:8000/api/v1/estimate/stream` by default; set `ESTIMATOR_API_URL` to another API base URL if needed. A failed or incomplete stream shows an error and retains the last completed estimate for the current browser session. The API must be running separately. Use `uv run python -m app --reload` for development. `/health` and `/docs` are available without an API key; estimation returns 503 when the key is missing.
+Open the Streamlit URL printed in the terminal (usually <http://localhost:8501>). Set `ESTIMATOR_API_URL` to an API base URL if needed; it defaults to `http://127.0.0.1:8000`. The API must be running separately. Use `uv run python -m app --reload` for development. `/health` and `/docs` are available without an API key; estimation returns 503 when the key is missing.
 
-The conversational form creates a server session on page load. Enter a transcript, optionally select multiple PDF or DOCX files, and select **Estimate conversation**; the structured result and current project metadata appear below. Subsequent submissions continue the same conversation. **Nueva conversación** starts a fresh session and clears its transcript, attachments, result and metadata; the original streaming form is separate. If creating a session or estimating fails, an error is shown and the previous conversation result and metadata are retained. Use **Nueva conversación** to retry session creation or recover from a server restart. Uploaded files stay selected until changed or the conversation is reset, so remove them if they should not be sent again.
+The conversational form creates a server session on page load. Enter a transcript, optionally select multiple PDF or DOCX files, and select **Estimate conversation**; the structured result appears below and current project metadata appears in the sidebar. Subsequent submissions continue the selected conversation. Use the sidebar's **Conversations** selector to switch between sessions and restore their transcript, result and metadata. The list lasts only for the current browser tab; sessions are also lost when the API restarts. Switching conversations clears the selected attachments; select them again if needed. **Nueva conversación** starts a fresh session and clears its transcript, attachments, result and metadata. The original streaming form is hidden; its API remains available. If creating a session or estimating fails, an error is shown and the previous conversation result and metadata are retained. Use **Nueva conversación** to retry session creation or recover from a server restart. Uploaded files stay selected until changed or the conversation is reset, so remove them if they should not be sent again.
 
 ## API
 
@@ -52,13 +52,18 @@ curl -X POST http://127.0.0.1:8000/sessions/SESSION_ID/estimate \
 
 The response contains the same structured `result`, `prompt_version` and `cached`
 fields as the existing endpoint, plus `project_metadata` (`project_name`,
-`assumed_team_size`, `mentioned_technologies`, `agreed_scope`). Each completed turn
+`assumed_team_size`, `mentioned_technologies`, `agreed_scope`,
+`explicit_constraints`, `rejected_options`). The last four are arrays of strings.
+Each completed turn
 is a user/assistant pair; six pairs are retained by default. Set the positive integer
 `MAX_TURNS` to change that limit. Each estimation prompt includes at most
 `MAX_TURNS - 1` completed pairs plus the current user message. Metadata is kept
-separately and included in a `<project_metadata>` block in each estimation prompt.
-A second LLM call extracts updated metadata from the previous facts and the latest
-turn. Both calls must succeed before the turn and metadata are saved.
+separately and included in a `<project_metadata>` block in each estimation prompt;
+the block is initially empty, and only populated fields are shown. The model is
+instructed to treat the facts as established unless the user explicitly revises them,
+while treating metadata content as untrusted data rather than instructions. A second
+LLM call extracts updated metadata from the previous facts and the latest turn. Both
+calls must succeed before the turn and metadata are saved.
 
 PDF text is extracted locally with `pypdf` and DOCX text with `python-docx`; each
 attachment is appended to the transcript under a filename separator before it is

@@ -14,9 +14,11 @@ RESULT = {'summary': 'A detailed project estimate', 'confidence_pct': 80,
                       'summary': 'Build the project'}],
           'total_duration_weeks': 2, 'total_cost_eur': 500}
 METADATA = {'project_name': 'Atlas', 'assumed_team_size': 3,
-            'mentioned_technologies': ['Python'], 'agreed_scope': ['Dashboard']}
+            'mentioned_technologies': ['Python'], 'agreed_scope': ['Dashboard'],
+            'explicit_constraints': ['No external services'], 'rejected_options': ['Rails']}
 EMPTY_METADATA = {'project_name': None, 'assumed_team_size': None,
-                  'mentioned_technologies': [], 'agreed_scope': []}
+                  'mentioned_technologies': [], 'agreed_scope': [],
+                  'explicit_constraints': [], 'rejected_options': []}
 ANSWER = {'result': RESULT, 'prompt_version': 'v1', 'cached': False,
           'project_metadata': METADATA}
 CREATE_ERROR = 'Unable to create a conversation. Check the service and try again.'
@@ -49,8 +51,15 @@ def test_session_created_once_and_multiple_turns_with_attachments(monkeypatch):
     monkeypatch.setattr(httpx, 'post', post)
     app = AppTest.from_file(APP_PATH).run()
     assert not app.exception
+    assert not app.title
+    assert [item.label for item in app.selectbox] == ['Conversations']
+    assert [item.label for item in app.text_area] == ['Transcript']
+    assert 'Describe your project to estimate its scope, hours and costs.' not in [item.value for item in app.caption]
+    assert 'Your description is sent to the configured API and its model provider. Avoid sensitive data.' not in [item.value for item in app.caption]
     assert app.session_state['session_id'] == 'abc'
     assert EMPTY_METADATA in shown_json(app)
+    assert [json.loads(item.value) for item in app.sidebar.json] == [EMPTY_METADATA]
+    assert not app.expander
     app.run()
     assert post.call_count == 1
     assert uploader.call_args.kwargs['accept_multiple_files'] is True
@@ -67,6 +76,7 @@ def test_session_created_once_and_multiple_turns_with_attachments(monkeypatch):
         ('attachments', ('notes.docx', b'docx data', docx.type))]
     assert RESULT in shown_json(app)
     assert METADATA in shown_json(app)
+    assert [json.loads(item.value) for item in app.sidebar.json] == [METADATA]
     assert 'Prompt version: v1' in [item.value for item in app.caption]
     transcript(app).set_value('Add a dashboard')
     button(app, 'Estimate conversation').click().run()
@@ -76,6 +86,35 @@ def test_session_created_once_and_multiple_turns_with_attachments(monkeypatch):
     app.run()
     assert post.call_count == 3
     assert RESULT in shown_json(app) and METADATA in shown_json(app)
+
+
+def test_select_conversation_restores_its_state_and_continues_session(monkeypatch):
+    monkeypatch.setattr(st, 'file_uploader', Mock(return_value=[]))
+    other_metadata = {**METADATA, 'project_name': 'Other'}
+    other_answer = {**ANSWER, 'project_metadata': other_metadata}
+    post = Mock(side_effect=[response({'session_id': 'first'}), response(ANSWER),
+                             response({'session_id': 'second'}), response(other_answer),
+                             response(ANSWER)])
+    monkeypatch.setattr(httpx, 'post', post)
+    app = AppTest.from_file(APP_PATH).run()
+    transcript(app).set_value('First transcript')
+    button(app, 'Estimate conversation').click().run()
+    button(app, 'Nueva conversación').click().run()
+    transcript(app).set_value('Second transcript')
+    button(app, 'Estimate conversation').click().run()
+    assert [json.loads(item.value) for item in app.sidebar.json] == [other_metadata]
+    app.sidebar.selectbox[0].select('first').run()
+    assert app.session_state['session_id'] == 'first'
+    assert transcript(app).value == 'First transcript'
+    assert [json.loads(item.value) for item in app.sidebar.json] == [METADATA]
+    assert RESULT in shown_json(app)
+    transcript(app).set_value('Continue first')
+    button(app, 'Estimate conversation').click().run()
+    assert post.call_args.args[0].endswith('/sessions/first/estimate')
+    app.sidebar.selectbox[0].select('second').run()
+    assert transcript(app).value == 'Second transcript'
+    assert [json.loads(item.value) for item in app.sidebar.json] == [other_metadata]
+    assert post.call_count == 5
 
 
 def test_new_conversation_resets_session_result_and_inputs(monkeypatch):

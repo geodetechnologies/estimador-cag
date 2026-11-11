@@ -78,48 +78,60 @@ def receive_estimate(response, display):
 
 
 st.set_page_config(page_title='CAG Estimator', page_icon='📋')
-st.title('CAG Estimator')
-st.caption('Describe your project to estimate its scope, hours and costs.')
-st.caption('Your description is sent to the configured API and its model provider. Avoid sensitive data.')
+if st.session_state.get('show_legacy_estimation_form', False):
+    st.title('CAG Estimator')
+    st.caption('Describe your project to estimate its scope, hours and costs.')
+    st.caption('Your description is sent to the configured API and its model provider. Avoid sensitive data.')
 
-with st.form('estimation'):
-    description = st.text_area('Project description', max_chars=2000)
-    project_type = st.selectbox('Project type', [item.value for item in ProjectType])
-    detail_level = st.selectbox('Detail level', [item.value for item in DetailLevel])
-    output_format = st.selectbox('Output format', [item.value for item in OutputFormat])
-    submitted = st.form_submit_button('Estimate')
+    with st.form('estimation'):
+        description = st.text_area('Project description', max_chars=2000)
+        project_type = st.selectbox('Project type', [item.value for item in ProjectType])
+        detail_level = st.selectbox('Detail level', [item.value for item in DetailLevel])
+        output_format = st.selectbox('Output format', [item.value for item in OutputFormat])
+        submitted = st.form_submit_button('Estimate')
 
-display = st.empty()
-if 'last_estimate' in st.session_state:
-    display.markdown(st.session_state['last_estimate']['text'])
+    display = st.empty()
+    if 'last_estimate' in st.session_state:
+        display.markdown(st.session_state['last_estimate']['text'])
 
-if submitted:
-    try:
-        request = EstimationRequest(description=description, project_type=project_type,
-                                    detail_level=detail_level, output_format=output_format)
-    except ValidationError:
-        st.error('The project description must contain between 20 and 2000 characters.')
-    else:
+    if submitted:
         try:
-            url = os.environ.get('ESTIMATOR_API_URL', 'http://127.0.0.1:8000').rstrip('/')
-            with httpx.stream('POST', url + '/api/v1/estimate/stream',
-                              json=request.model_dump(mode='json'), timeout=45.0) as response:
-                result = receive_estimate(response, display)
-            st.session_state['last_estimate'] = result
-        except (httpx.HTTPError, ValueError):
-            if 'last_estimate' in st.session_state:
-                display.markdown(st.session_state['last_estimate']['text'])
-            else:
-                display.empty()
-            st.error('Unable to obtain an estimate from the API. Check the service and try again.')
+            request = EstimationRequest(description=description, project_type=project_type,
+                                        detail_level=detail_level, output_format=output_format)
+        except ValidationError:
+            st.error('The project description must contain between 20 and 2000 characters.')
+        else:
+            try:
+                url = os.environ.get('ESTIMATOR_API_URL', 'http://127.0.0.1:8000').rstrip('/')
+                with httpx.stream('POST', url + '/api/v1/estimate/stream',
+                                  json=request.model_dump(mode='json'), timeout=45.0) as response:
+                    result = receive_estimate(response, display)
+                st.session_state['last_estimate'] = result
+            except (httpx.HTTPError, ValueError):
+                if 'last_estimate' in st.session_state:
+                    display.markdown(st.session_state['last_estimate']['text'])
+                else:
+                    display.empty()
+                st.error('Unable to obtain an estimate from the API. Check the service and try again.')
 
-if 'last_estimate' in st.session_state:
-    st.caption(f"Prompt version: {st.session_state['last_estimate']['prompt_version']}")
+    if 'last_estimate' in st.session_state:
+        st.caption(f"Prompt version: {st.session_state['last_estimate']['prompt_version']}")
 
 
 st.header('Conversational estimate')
 st.caption('Send each transcript with optional PDF or DOCX attachments. Each turn builds on this conversation.')
 url = os.environ.get('ESTIMATOR_API_URL', 'http://127.0.0.1:8000').rstrip('/')
+
+
+def save_conversation():
+    """Keep the active conversation's display state in this browser session."""
+    session_id = st.session_state.get('session_id')
+    if session_id and session_id in st.session_state.get('conversations', {}):
+        st.session_state['conversations'][session_id] = {
+            'transcript': st.session_state.get('conversation_transcript', ''),
+            'metadata': st.session_state['project_metadata'],
+            'estimate': st.session_state.get('conversation_estimate'),
+        }
 
 
 def start_conversation():
@@ -133,7 +145,13 @@ def start_conversation():
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         st.error('Unable to create a conversation. Check the service and try again.')
         return
+    save_conversation()
+    st.session_state.setdefault('conversations', {})
+    st.session_state['conversations'][session_id] = {
+        'transcript': '', 'metadata': ProjectMetadata().model_dump(), 'estimate': None,
+    }
     st.session_state['session_id'] = session_id
+    st.session_state['selected_conversation'] = session_id
     st.session_state['project_metadata'] = ProjectMetadata().model_dump()
     st.session_state.pop('conversation_estimate', None)
     st.session_state['conversation_transcript'] = ''
@@ -146,6 +164,23 @@ if 'conversation_initialized' not in st.session_state:
 
 if st.button('Nueva conversación'):
     start_conversation()
+
+conversations = st.session_state.get('conversations', {})
+if conversations:
+    with st.sidebar:
+        selected = st.selectbox('Conversations', list(conversations), key='selected_conversation',
+                                format_func=lambda session_id: f"Conversation {list(conversations).index(session_id) + 1}")
+    if selected != st.session_state['session_id']:
+        save_conversation()
+        conversation = conversations[selected]
+        st.session_state['session_id'] = selected
+        st.session_state['conversation_transcript'] = conversation['transcript']
+        st.session_state['project_metadata'] = conversation['metadata']
+        if conversation['estimate'] is None:
+            st.session_state.pop('conversation_estimate', None)
+        else:
+            st.session_state['conversation_estimate'] = conversation['estimate']
+        st.session_state['upload_generation'] = st.session_state.get('upload_generation', 0) + 1
 
 with st.form('conversation'):
     transcript = st.text_area('Transcript', key='conversation_transcript')
@@ -176,5 +211,6 @@ if 'conversation_estimate' in st.session_state:
     st.json(st.session_state['conversation_estimate']['result'])
     st.caption(f"Prompt version: {st.session_state['conversation_estimate']['prompt_version']}")
 
-with st.expander('Project metadata', expanded=True):
+with st.sidebar:
+    st.subheader('Project metadata')
     st.json(st.session_state.get('project_metadata', ProjectMetadata().model_dump()))
