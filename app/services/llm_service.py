@@ -1,5 +1,7 @@
 """Combine static context with user text and translate provider failures safely."""
 
+from __future__ import annotations
+
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -27,7 +29,8 @@ class EstimationError(Exception):
 
 async def estimate(transcription: str, settings: Settings, *, system: str = SYSTEM_PROMPT,
                    json_output: bool = False,
-                   history: list[dict[str, str]] | None = None) -> str:
+                   history: list[dict[str, str]] | None = None,
+                   metrics: CallMetrics | None = None) -> str:
     """Request an estimate with a per-call async client that closes on exit.
 
     Static system context and untrusted user text remain separate messages;
@@ -42,6 +45,7 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
     if key is None or not key.get_secret_value().strip():
         raise EstimationError(503, 'Set OPENAI_API_KEY on the server to enable estimation.')
 
+    started = perf_counter() if metrics is not None else None
     try:
         async with AsyncOpenAI(
             api_key=key.get_secret_value(), timeout=30.0, max_retries=0,
@@ -65,11 +69,19 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
     content = response.choices[0].message.content if response.choices else None
     if not content or not content.strip():
         raise EstimationError(502, 'Estimation provider returned an empty result.')
+    if metrics is not None:
+        model = getattr(response, 'model', None)
+        usage = getattr(response, 'usage', None)
+        metrics.model = model if isinstance(model, str) and model else None
+        metrics.input_tokens = _token_count(getattr(usage, 'prompt_tokens', None))
+        metrics.output_tokens = _token_count(getattr(usage, 'completion_tokens', None))
+        metrics.elapsed_seconds = perf_counter() - started
     return content.strip()
 
 
 async def structured_estimate(transcription: str, settings: Settings, *, system: str,
-                              history: list[dict[str, str]] | None = None) -> EstimationResult:
+                              history: list[dict[str, str]] | None = None,
+                              metrics: CallMetrics | None = None) -> EstimationResult:
     """Validate provider JSON and enforce business rules before returning it."""
     schema = EstimationResult.model_json_schema()
     instructions = (f'\nReturn a JSON object matching this schema: {json.dumps(schema)}. '
@@ -77,12 +89,21 @@ async def structured_estimate(transcription: str, settings: Settings, *, system:
                     'When confidence_pct is below 30, summary must start with Out of scope:. '
                     'Provide phases before totals. All monetary amounts are in euros.')
     options = {'history': history} if history is not None else {}
+    pending = CallMetrics() if metrics is not None else None
+    if pending is not None:
+        options['metrics'] = pending
     result = await estimate(transcription, settings, system=system + instructions,
                             json_output=True, **options)
     try:
-        return EstimationResult.model_validate_json(result)
+        validated = EstimationResult.model_validate_json(result)
     except ValidationError:
         raise EstimationError(502, 'Estimation provider returned an invalid result.') from None
+    if metrics is not None:
+        metrics.model = pending.model
+        metrics.input_tokens = pending.input_tokens
+        metrics.output_tokens = pending.output_tokens
+        metrics.elapsed_seconds = pending.elapsed_seconds
+    return validated
 
 
 @asynccontextmanager
@@ -108,6 +129,19 @@ class CallMetrics:
     input_tokens: int | None = None
     output_tokens: int | None = None
     elapsed_seconds: float | None = None
+
+    @property
+    def cost_usd(self) -> float | None:
+        """Estimate uncached text-token cost only for explicitly priced models."""
+        prices = {'gpt-4o-mini-2024-07-18': (0.15, 0.60)}  # USD per million tokens
+        price = prices.get(self.model)
+        if price is None or self.input_tokens is None or self.output_tokens is None:
+            return None
+        return (self.input_tokens * price[0] + self.output_tokens * price[1]) / 1_000_000
+
+
+def _token_count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
 
 
 async def stream_estimate(

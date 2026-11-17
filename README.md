@@ -63,7 +63,24 @@ the block is initially empty, and only populated fields are shown. The model is
 instructed to treat the facts as established unless the user explicitly revises them,
 while treating metadata content as untrusted data rather than instructions. A second
 LLM call extracts updated metadata from the previous facts and the latest turn. Both
-calls must succeed before the turn and metadata are saved.
+calls must succeed before the turn and metadata are saved. After a successful turn,
+application INFO logs contain one provider-usage observation per call: operation,
+provider-reported model, input and output tokens, elapsed seconds, and estimated USD
+cost. Missing provider data or an unpriced model is reported as `None`, not zero.
+The only priced model is `gpt-4o-mini-2024-07-18`, at $0.15 per million input
+and $0.60 per million output tokens; this is an uncached text-token list-price
+estimate, not a billing figure. Other models, including aliases, are unpriced.
+Prompts, transcripts, attachments, metadata and provider error details are not
+included in these observations. No success observations are emitted for failed turns.
+
+Use `GET /sessions/{session_id}` to inspect a session without returning its content.
+The response contains `session_id`, `history_window_message_count` (the number of
+user and assistant messages currently retained in the sliding window, not total
+turns or a lifetime count), and `max_turns` (the configured maximum number of
+retained user/assistant pairs). The count excludes the system prompt. Inspection
+waits for any in-progress turn on the same session and returns no project metadata,
+history, prompts, attachments or token usage. An unknown session returns HTTP 404
+with `{"detail":"Session not found."}`, as does the estimate endpoint.
 
 PDF text is extracted locally with `pypdf` and DOCX text with `python-docx`; each
 attachment is appended to the transcript under a filename separator before it is

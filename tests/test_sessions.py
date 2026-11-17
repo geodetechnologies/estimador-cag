@@ -98,6 +98,91 @@ def pdf_bytes():
     return output.getvalue()
 
 
+def test_session_inspection_window_and_post_behavior(provider):
+    calls, _ = provider
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, openai_api_key='test', max_turns=1)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            created = await client.post('/sessions')
+            assert created.status_code == 200
+            session = created.json()['session_id']
+            url = f'/sessions/{session}'
+            empty = await client.get(url)
+            assert empty.status_code == 200
+            assert empty.json() == {'session_id': session, 'history_window_message_count': 0, 'max_turns': 1}
+
+            first = await client.post(f'{url}/estimate', data={'transcript': 'Atlas uses Python'},
+                files=[('attachments', ('secret.pdf', pdf_bytes(), 'application/pdf'))])
+            assert first.status_code == 200
+            assert first.json() == {'result': RESULT, 'prompt_version': 'v1', 'cached': False,
+                'project_metadata': EMPTY_METADATA | {'project_name': 'Atlas',
+                    'mentioned_technologies': ['Python'], 'agreed_scope': ['PDF feature']}}
+            one = await client.get(url)
+            assert one.status_code == 200
+            assert one.json() == {'session_id': session, 'history_window_message_count': 2, 'max_turns': 1}
+
+            second = await client.post(f'{url}/estimate', data={'transcript': 'private transcript'})
+            assert second.status_code == 200
+            assert second.json() == {'result': RESULT, 'prompt_version': 'v1', 'cached': False,
+                'project_metadata': EMPTY_METADATA | {'project_name': 'Atlas',
+                    'mentioned_technologies': ['Python'], 'agreed_scope': ['PDF feature']}}
+            assert [m['role'] for m in calls[2]['messages']] == ['system', 'user']
+            full = await client.get(url)
+            assert full.status_code == 200
+            # Exact shape excludes metadata, history, prompts, attachments and token usage.
+            assert full.json() == {'session_id': session, 'history_window_message_count': 2, 'max_turns': 1}
+
+            rejected = await client.post(f'{url}/estimate', data={'transcript': ' '})
+            assert rejected.status_code == 422
+            assert rejected.json() == {'detail': 'Transcript must not be blank.'}
+            assert (await client.get(url)).json() == full.json()
+    asyncio.run(run())
+
+
+def test_session_inspection_unknown_matches_estimate_404():
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            inspected = await client.get('/sessions/not-a-session')
+            estimated = await client.post('/sessions/not-a-session/estimate', data={'transcript': 'test'})
+            assert inspected.status_code == estimated.status_code == 404
+            assert inspected.json() == estimated.json() == {'detail': 'Session not found.'}
+    asyncio.run(run())
+
+
+def test_session_inspection_waits_for_inflight_turn(provider):
+    calls, _ = provider
+    create = llm_service.AsyncOpenAI.return_value.__aenter__.return_value.chat.completions.create
+    original = create.side_effect
+
+    async def run():
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed(**kwargs):
+            if not calls:
+                started.set()
+                await release.wait()
+            return await original(**kwargs)
+
+        create.side_effect = delayed
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            session = (await client.post('/sessions')).json()['session_id']
+            turn = asyncio.create_task(client.post(f'/sessions/{session}/estimate', data={'transcript': 'Atlas'}))
+            await asyncio.wait_for(started.wait(), 1)
+            inspection = asyncio.create_task(client.get(f'/sessions/{session}'))
+            await asyncio.sleep(0.02)
+            try:
+                assert not inspection.done()
+            finally:
+                release.set()
+            result, snapshot = await asyncio.gather(turn, inspection)
+            assert result.status_code == 200
+            assert snapshot.status_code == 200
+            assert snapshot.json() == {'session_id': session, 'history_window_message_count': 2, 'max_turns': 6}
+    asyncio.run(run())
+
+
 def test_two_turns_pdf_and_session_isolation(provider):
     calls, _ = provider
     async def run():
