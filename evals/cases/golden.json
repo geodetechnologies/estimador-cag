@@ -1,0 +1,22 @@
+[
+  {
+    "id": "community-booking",
+    "transcript": "A community centre needs a web portal where visitors can reserve rooms and staff can manage bookings.",
+    "project_type": "web_saas",
+    "expected_in_summary": ["booking"],
+    "expected_phase_count_range": [2, 5]
+  },
+  {
+    "id": "inventory-dashboard",
+    "transcript": "Our warehouse team wants an internal dashboard to track stock levels and flag low inventory.",
+    "project_type": "internal_tool",
+    "expected_in_summary": ["inventory"],
+    "expected_duration_weeks_range": [2, 20]
+  },
+  {
+    "id": "vague-idea",
+    "transcript": "We want some kind of software but have no requirements or users identified.",
+    "project_type": "mobile_app",
+    "expected_out_of_scope": true
+  }
+]
