@@ -115,6 +115,31 @@ data: {}
 
 Concatenate `delta.text` values to reconstruct the estimate. Before the first text fragment, validation and provider failures use normal HTTP error statuses and JSON `detail`. After streaming starts, the status remains 200: a failure ends with `event: error` and JSON `{"detail": "..."}` instead of `done`. Treat a stream without `done` as incomplete, including on disconnect; do not use partial text as a completed estimate. Provider diagnostics are not exposed.
 
+## Budget embeddings
+
+From the repository root (for the session worktree, `.worktrees/session-07`), set `OPENAI_API_KEY` in the environment or a local `.env`. The CLI makes two paid embedding calls and may retry rate limits (up to three retries per call). `--help` needs no key and makes no calls. Texts are sent to OpenAI; do not use sensitive data.
+
+```sh
+uv run python scripts/compare.py --text-a "OAuth authentication" --text-b "Banking authorization"
+```
+
+To run the API and CLI in a container, install Docker and Compose, then from the same directory:
+
+```sh
+docker compose build servicio_ia
+docker compose up -d servicio_ia
+docker compose exec servicio_ia python scripts/compare.py --text-a "OAuth authentication" --text-b "Banking authorization"
+```
+
+Compose injects `OPENAI_API_KEY` from the shell or Compose's local `.env`; credentials are not copied into the image. Restart the container after changing the key. The API binds to host loopback at port 8000. Check `http://127.0.0.1:8000/docs` for the ingest endpoint. The provided `data/budgets_sample.json` is a JSON array; wrap it in `budgets` for the request:
+
+```sh
+python -c 'import json; print(json.dumps({"budgets": json.load(open("data/budgets_sample.json"))}))' | \
+  curl -X POST http://127.0.0.1:8000/embeddings/ingest -H 'Content-Type: application/json' --data-binary @-
+```
+
+Ingestion also makes paid embedding calls. Vectors are returned in memory and are not stored in a vector database.
+
 ## Prompts and tests
 
 `app/prompts/estimation/v1/` contains the system, user and few-shot templates. `app/prompts/loader.py` renders the system and user messages separately with strict undefined-variable checking. Version directories make changes explicit; the API currently uses `v1`.

@@ -1,0 +1,12 @@
+.env
+.env.*
+.git
+.venv
+.worktrees
+.verify*
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+odd
+*.csv
