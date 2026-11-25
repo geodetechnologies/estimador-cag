@@ -2,10 +2,12 @@
 
 from fastapi import FastAPI
 
+from app.embedding_pipeline.router import router as embedding_router
 from app.routers.estimations import router
 from app.routers.sessions import router as sessions_router
 
 app = FastAPI(title='CAG Estimator', version='0.1.0')
+app.include_router(embedding_router, prefix='/embeddings')
 app.include_router(router)
 app.include_router(sessions_router)
 
