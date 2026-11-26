@@ -62,16 +62,27 @@ separately and included in a `<project_metadata>` block in each estimation promp
 the block is initially empty, and only populated fields are shown. The model is
 instructed to treat the facts as established unless the user explicitly revises them,
 while treating metadata content as untrusted data rather than instructions. A second
-LLM call extracts updated metadata from the previous facts and the latest turn. Both
-calls must succeed before the turn and metadata are saved. After a successful turn,
+LLM call extracts updated metadata from the previous facts and the latest turn. When
+an older pair leaves the prompt window, another provider call folds it into a cumulative
+summary. When the evicted user text contains an explicit commitment, legal requirement
+or deadline, the full evicted user/assistant pair is also retained as an anchor. The
+summary and anchors are untrusted data, not
+instructions. An audience tier is resolved from the current transcript and previous
+metadata to tailor presentation; it does not change the response schema or grant access.
+These volatile memories can grow and are sent to the provider. All required calls must
+succeed before history, metadata and memory are saved together. After a successful turn,
 application INFO logs contain one provider-usage observation per call: operation,
-provider-reported model, input and output tokens, elapsed seconds, and estimated USD
-cost. Missing provider data or an unpriced model is reported as `None`, not zero.
+allowlisted provider-reported model, input and output tokens, elapsed seconds, and estimated
+USD cost. Other model names are withheld. Missing provider data or an unpriced model is
+reported as `None`, not zero.
 The only priced model is `gpt-4o-mini-2024-07-18`, at $0.15 per million input
 and $0.60 per million output tokens; this is an uncached text-token list-price
 estimate, not a billing figure. Other models, including aliases, are unpriced.
 Prompts, transcripts, attachments, metadata and provider error details are not
-included in these observations. No success observations are emitted for failed turns.
+included in these observations. No provider-usage success observations are emitted for
+failed turns. Each estimate request also attempts one content-free `turn_observed` event,
+including on validation or provider failures; see the [observation guide](docs/components/turn-observation.md)
+for field definitions, unknown values, timing and limitations.
 
 Use `GET /sessions/{session_id}` to inspect a session without returning its content.
 The response contains `session_id`, `history_window_message_count` (the number of
@@ -114,6 +125,42 @@ data: {}
 ```
 
 Concatenate `delta.text` values to reconstruct the estimate. Before the first text fragment, validation and provider failures use normal HTTP error statuses and JSON `detail`. After streaming starts, the status remains 200: a failure ends with `event: error` and JSON `{"detail": "..."}` instead of `done`. Treat a stream without `done` as incomplete, including on disconnect; do not use partial text as a completed estimate. Provider diagnostics are not exposed.
+
+## Evaluations
+
+Run `python -m evals.run --transport in-process` for the bundled synthetic cases,
+or use `--transport http --base-url http://127.0.0.1:8000` against a running API.
+Both modes send transcripts to the configured provider. See
+[the evaluation runner guide](docs/components/evals-runner.md) for privacy,
+metrics, output and custom datasets.
+
+For a simulated CSV, use `python -m evals.stress.run --output
+/path/to/new-report.csv`. Add `--http http://localhost:8000` to start a separate,
+authenticated loopback service for the run; this is not the public application route.
+Both default modes use a deterministic fake provider and synthetic attachments, not
+real provider measurements. Explicit `--real` opts in to a potentially paid provider
+run using environment-supplied credentials and synthetic data; it can be combined
+with `--http` for the separate local service. Output is reserved exclusively before any
+provider call; failures can incur charges and leave an empty or partial file. Fixed
+safe error categories are reported where distinguishable: in-process provider failures
+can distinguish unavailable, busy or rate limited, empty result and invalid structured
+result. When known, invalid structured results identify the estimate or metadata
+validation stage; recognized estimate schema errors may identify up to three fixed
+field and category pairs, with a truncation marker, indicate invalid JSON, or name a
+single proven business rule using a fixed identifier. Unknown or multiple business-rule
+failures retain the stage-only message, and unknown stages retain the generic
+invalid-result message. Recognized
+direct SDK contexts for unavailable may identify authentication rejection or connection
+failure; unknown contexts remain unavailable. Other failures,
+including sanitized HTTP step failures, remain generic.
+Both modes flush each attempted turn to CSV; proven pre-commit invalid estimates
+are recorded and subsequent scenario turns continue, potentially incurring more charges.
+Rejected attempts have blank unknown cost and a nonzero final exit; other uncertain
+failures stop. `scenario_turn` tracks attempts separately from committed `turn_index`,
+with fixed `status` and `reason` columns (new in HTTP CSV output).
+There are no automatic retries. See the
+[stress runner guide](docs/components/stress-runner.md) for timing, privacy,
+unknown fields and verification limitations.
 
 ## Prompts and tests
 
