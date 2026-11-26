@@ -21,10 +21,12 @@ def render_estimation_prompt(request: EstimationRequest, version: str = 'v1') ->
                  for name in ('system', 'user'))
 
 
-def render_session_estimation_system(project_metadata: ProjectMetadata) -> str:
-    """Reuse estimation instructions and render session facts as untrusted data."""
-    return _environment.get_template('metadata/session-estimation.j2').render(
-        project_metadata=project_metadata)
+def render_session_estimation_system(project_metadata: ProjectMetadata, *, summary: str = '',
+                                     anchors: list[tuple[str, str]] | None = None,
+                                     tier: str = 'default') -> str:
+    """Reuse estimation instructions and render session memory as untrusted data."""
+    return _environment.get_template('session/v1/system.j2').render(
+        project_metadata=project_metadata, summary=summary, anchors=anchors or [], tier=tier)
 
 
 def render_metadata_prompt() -> str:

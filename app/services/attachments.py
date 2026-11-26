@@ -27,8 +27,10 @@ def _docx_text(container) -> str:
     return '\n'.join(parts)
 
 
-async def enrich_transcript(transcript: str, attachments: list[UploadFile]) -> str:
+async def enrich_transcript(transcript: str, attachments: list[UploadFile], *,
+                            observation: dict | None = None) -> str:
     parts = [transcript]
+    attachment_chars = 0
     for upload in attachments:
         filename = PurePath((upload.filename or '').replace('\\', '/')).name
         suffix = PurePath(filename).suffix.lower()
@@ -44,5 +46,9 @@ async def enrich_transcript(transcript: str, attachments: list[UploadFile]) -> s
                 text = _docx_text(Document(BytesIO(data)))
         except Exception:
             raise AttachmentError('Could not extract attachment text.') from None
+        attachment_chars += len(text)
         parts.append(f'--- attachment: {filename} ---\n{text}')
-    return '\n\n'.join(parts)
+    enriched = '\n\n'.join(parts)
+    if observation is not None:
+        observation.update(enriched_transcript_chars=len(enriched), attachments_total_chars=attachment_chars)
+    return enriched

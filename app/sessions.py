@@ -45,6 +45,10 @@ class ConversationHistory:
 class Session:
     history: ConversationHistory
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
+    summary: str = ''
+    anchors: list[tuple[str, str]] = field(default_factory=list)
+    tier: str = 'default'
+    committed_turns: int = 0
     lock: anyio.Lock = field(default_factory=anyio.Lock)
 
 

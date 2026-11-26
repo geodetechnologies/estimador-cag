@@ -17,6 +17,14 @@ from app.main import app
 from app.sessions import ConversationHistory
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings():
+    # Even validation/404 tests must not load a local environment file.
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, openai_api_key='test')
+    yield
+    app.dependency_overrides.clear()
+
+
 def test_history_keeps_complete_latest_turns_and_system():
     history = ConversationHistory(max_turns=2)
     for i in range(3):
@@ -56,8 +64,10 @@ def provider(monkeypatch):
     failure = {'next_metadata': False}
 
     async def create(**kwargs):
-        calls.append(kwargs)
         system = kwargs['messages'][0]['content']
+        if 'cumulative record' in system:
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Earlier context'))])
+        calls.append(kwargs)
         text = json.dumps(kwargs['messages'], ensure_ascii=False)
         if 'project metadata extractor' in system:
             if failure['next_metadata']:

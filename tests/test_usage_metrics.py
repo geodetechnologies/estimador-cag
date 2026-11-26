@@ -85,7 +85,7 @@ def test_conversation_observes_both_calls_without_sensitive_data(monkeypatch, ca
     first, second = [r.getMessage() for r in records]
     assert 'estimation' in first and 'gpt-4o-mini-2024-07-18' in first
     assert '1000' in first and '500' in first and '0.00045' in first
-    assert 'metadata' in second and 'not-priced' in second and 'None' in second
+    assert 'metadata' in second and 'model=None' in second and 'not-priced' not in second
     assert all('elapsed' in r.getMessage() for r in records)
     for secret in ('private transcript', 'A detailed project estimate', 'project metadata extractor',
                    'previous_metadata', 'test-key'):

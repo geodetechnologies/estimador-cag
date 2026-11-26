@@ -18,6 +18,49 @@ from app.prompts import SYSTEM_PROMPT
 from app.schemas import EstimationResult
 
 
+# Identity-only markers set exclusively at the actual JSON validation boundary.
+_PHASE_COST_RULE = object()
+_LOW_CONFIDENCE_RULE = object()
+
+
+def _business_rule(error: ValidationError) -> object | None:
+    """Identify one actual model validator without inspecting its message or values.
+
+    Pydantic's root error retains the original validator's traceback. Its frame
+    supplies the already field-validated model, so the existing validators can
+    establish whether exactly one rule failed without duplicating either rule.
+    Any unfamiliar error shape or validator failure remains unclassified.
+    """
+    try:
+        if type(error) is not ValidationError or error.error_count() != 1:
+            return None
+        items = error.errors(include_input=False, include_url=False)
+        if len(items) != 1 or items[0].get('loc') != () or items[0].get('type') != 'value_error':
+            return None
+        original = items[0].get('ctx', {}).get('error')
+        if type(original) is not ValueError:
+            return None
+        trace = original.__traceback__
+        if trace is None or trace.tb_next is not None:
+            return None
+        validators = ((EstimationResult.phases_sum_matches_total, _PHASE_COST_RULE),
+                      (EstimationResult.low_confidence_requires_out_of_scope_prefix, _LOW_CONFIDENCE_RULE))
+        origin = next((marker for validator, marker in validators
+                       if trace.tb_frame.f_code is validator.__code__), None)
+        model = trace.tb_frame.f_locals.get('self')
+        if origin is None or type(model) is not EstimationResult:
+            return None
+        failures = []
+        for validator, marker in validators:
+            try:
+                validator(model)
+            except ValueError:
+                failures.append(marker)
+        return origin if failures == [origin] else None
+    except Exception:
+        return None
+
+
 class EstimationError(Exception):
     """Carry an HTTP status and a client-facing detail without provider diagnostics."""
 
@@ -81,7 +124,8 @@ async def estimate(transcription: str, settings: Settings, *, system: str = SYST
 
 async def structured_estimate(transcription: str, settings: Settings, *, system: str,
                               history: list[dict[str, str]] | None = None,
-                              metrics: CallMetrics | None = None) -> EstimationResult:
+                              metrics: CallMetrics | None = None,
+                              _validation_origin: object | None = None) -> EstimationResult:
     """Validate provider JSON and enforce business rules before returning it."""
     schema = EstimationResult.model_json_schema()
     instructions = (f'\nReturn a JSON object matching this schema: {json.dumps(schema)}. '
@@ -96,8 +140,12 @@ async def structured_estimate(transcription: str, settings: Settings, *, system:
                             json_output=True, **options)
     try:
         validated = EstimationResult.model_validate_json(result)
-    except ValidationError:
-        raise EstimationError(502, 'Estimation provider returned an invalid result.') from None
+    except ValidationError as validation_error:
+        error = EstimationError(502, 'Estimation provider returned an invalid result.')
+        if _validation_origin is not None:
+            error._validation_origin = _validation_origin
+            error._validation_business_rule = _business_rule(validation_error)
+        raise error from None
     if metrics is not None:
         metrics.model = pending.model
         metrics.input_tokens = pending.input_tokens
