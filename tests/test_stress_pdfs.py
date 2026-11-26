@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -72,7 +73,8 @@ def test_rejects_unsupported_size_without_creating_files(tmp_path):
     result = run_generator(10, tmp_path)
     assert result.returncode == 2
     assert result.stdout == ''
-    assert 'invalid choice: 10' in result.stderr
+    # Python 3.14+ quotes the rejected value; older versions do not.
+    assert re.search(r"invalid choice: '?10'?", result.stderr)
     assert list(tmp_path.iterdir()) == []
 
 
