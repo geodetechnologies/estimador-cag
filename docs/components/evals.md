@@ -15,5 +15,6 @@ out-of-scope cases. Content searches the summary and phase names/summaries
 case-insensitively; out-of-scope content checks are explicitly skipped.
 
 `case.tier` and `expected_tier` are metadata for future integration, not checked
-by these metrics. These are local primitives only: no evaluation runner or CLI
-is implemented here, and no judge, embeddings, or stress metrics are provided.
+by these metrics. The evaluation runner and CLI are described in
+[evals-runner.md](evals-runner.md). No judge, embeddings, or stress metrics are
+provided.
